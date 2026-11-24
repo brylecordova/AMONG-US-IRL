@@ -1,0 +1,6 @@
+{
+  "name": "Skeld IRL",
+  "description": "Real-life QR-powered Among Us social deduction game with 16 interactive Skeld tasks, Investigator and Shapeshifter roles, and printable QR badges.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
