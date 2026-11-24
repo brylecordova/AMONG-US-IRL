@@ -5,30 +5,34 @@ interface TaskProps {
   onComplete: () => void;
 }
 
-// 13. CALIBRATE DISTRIBUTOR (Short · Electrical)
+// 13. CALIBRATE DISTRIBUTOR (Short · Electrical) — Accessible timing & clear lock cue
 export const CalibrateDistributorTask: React.FC<TaskProps> = ({ onComplete }) => {
   const [stage, setStage] = useState(0); // 0, 1, 2
-  const [angles, setAngles] = useState([120, 210, 45]);
-  const [feedback, setFeedback] = useState('LOCK PHASE 1 AT 3 O’CLOCK');
+  const [angles, setAngles] = useState([140, 220, 60]);
+  const [feedback, setFeedback] = useState('TAP LOCK WHEN BAR HITS GREEN NOTCH');
+  const [missFlash, setMissFlash] = useState(false);
   const anglesRef = useRef(angles);
   anglesRef.current = angles;
 
   useEffect(() => {
     const timer = setInterval(() => {
       setAngles((prev) => [
-        stage > 0 ? 0 : (prev[0] + 8) % 360,
-        stage > 1 ? 0 : (prev[1] + 10) % 360,
-        stage > 2 ? 0 : (prev[2] + 12) % 360,
+        stage > 0 ? 0 : (prev[0] + 3.4) % 360,
+        stage > 1 ? 0 : (prev[1] + 4.4) % 360,
+        stage > 2 ? 0 : (prev[2] + 5.4) % 360,
       ]);
     }, 35);
     return () => clearInterval(timer);
   }, [stage]);
 
+  const activeAngle = stage < 3 ? angles[stage] : 0;
+  const activeDist = Math.min(activeAngle, 360 - activeAngle);
+  const inWindow = stage < 3 && activeDist <= 52;
+
   const lockRing = () => {
     const current = anglesRef.current[stage];
-    // Target is 0 deg (within ±36 deg tolerance for fair mobile taps)
     const dist = Math.min(current, 360 - current);
-    if (dist <= 38) {
+    if (dist <= 52) {
       soundEngine.playClick();
       const next = stage + 1;
       if (next >= 3) {
@@ -38,54 +42,80 @@ export const CalibrateDistributorTask: React.FC<TaskProps> = ({ onComplete }) =>
         setTimeout(onComplete, 350);
       } else {
         setStage(next);
-        setFeedback(`LOCK PHASE ${next + 1} AT 3 O’CLOCK`);
+        setFeedback(`PHASE ${next} LOCKED — NOW ALIGN PHASE ${next + 1}`);
       }
     } else {
-      setStage(0);
-      setFeedback('MISSED TIMING — RESET TO PHASE 1');
+      setMissFlash(true);
+      setTimeout(() => setMissFlash(false), 300);
+      setFeedback(`MISSED — TRY PHASE ${stage + 1} AGAIN WHEN GREEN`);
     }
   };
 
   const ringColors = ['#FACC15', '#3B82F6', '#22D3EE'];
 
   return (
-    <div className="bg-[#1E2430] border border-white/15 rounded-xl p-5 space-y-4">
-      <div className="text-xs font-mono text-center text-amber-300">{feedback}</div>
+    <div className="bg-[#1E2430] border border-white/15 rounded-xl p-4 sm:p-5 space-y-4 select-none">
+      <div
+        className={`text-xs font-mono text-center font-bold ${
+          inWindow ? 'text-emerald-400' : missFlash ? 'text-red-400' : 'text-amber-300'
+        }`}
+      >
+        {inWindow ? 'ALIGNED! TAP LOCK NOW!' : feedback}
+      </div>
 
-      <div className="flex items-center justify-center gap-3">
-        {[0, 1, 2].map((idx) => (
-          <div
-            key={idx}
-            className={`relative w-20 h-20 rounded-full border-4 flex items-center justify-center ${
-              idx === stage ? 'border-white' : idx < stage ? 'border-emerald-400' : 'border-slate-700'
-            }`}
-          >
-            {/* 3 o'clock notch */}
-            <div className="absolute right-[-6px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-emerald-400" />
+      <div className="flex items-center justify-center gap-3 sm:gap-4">
+        {[0, 1, 2].map((idx) => {
+          const isCurrent = idx === stage;
+          const isLocked = idx < stage;
+          return (
             <div
-              className="w-14 h-2 rounded-full origin-center"
-              style={{
-                backgroundColor: ringColors[idx],
-                transform: `rotate(${angles[idx]}deg)`,
-              }}
-            />
-          </div>
-        ))}
+              key={idx}
+              className={`relative w-18 h-18 sm:w-20 sm:h-20 rounded-full border-4 flex items-center justify-center transition-colors ${
+                isLocked
+                  ? 'border-emerald-400 bg-emerald-500/10'
+                  : isCurrent && inWindow
+                    ? 'border-emerald-400 bg-emerald-500/15'
+                    : isCurrent
+                      ? 'border-white'
+                      : 'border-slate-700 opacity-60'
+              }`}
+            >
+              {/* Wide 3 o'clock alignment notch */}
+              <div
+                className={`absolute right-[-7px] top-1/2 -translate-y-1/2 w-3.5 h-5 rounded-full border border-slate-950 ${
+                  isCurrent && inWindow ? 'bg-emerald-400 scale-110' : 'bg-emerald-500/80'
+                }`}
+              />
+              {/* Spinning contact bar */}
+              <div
+                className="w-12 sm:w-14 h-2.5 rounded-full origin-center"
+                style={{
+                  backgroundColor: isLocked ? '#34D399' : ringColors[idx],
+                  transform: `rotate(${angles[idx]}deg)`,
+                }}
+              />
+            </div>
+          );
+        })}
       </div>
 
       <button
         type="button"
         disabled={stage >= 3}
         onClick={lockRing}
-        className="w-full py-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-bold text-sm transition-transform"
+        className={`w-full min-h-[50px] rounded-xl font-bold text-sm transition-transform active:scale-95 ${
+          inWindow
+            ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+            : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
+        }`}
       >
-        Lock Phase {Math.min(3, stage + 1)}
+        {stage >= 3 ? 'Calibrated' : `Lock Phase ${stage + 1}`}
       </button>
     </div>
   );
 };
 
-// 14. DIVERT POWER (Short · Electrical)
+// 14. DIVERT POWER (Short · Electrical) — Mobile-friendly full-width slider
 export const DivertPowerTask: React.FC<TaskProps> = ({ onComplete }) => {
   const [activeIdx] = useState(() => Math.floor(Math.random() * 4));
   const [sliderVal, setSliderVal] = useState(20);
@@ -100,32 +130,48 @@ export const DivertPowerTask: React.FC<TaskProps> = ({ onComplete }) => {
   };
 
   return (
-    <div className="bg-[#1E2430] border border-white/15 rounded-xl p-5 space-y-5">
+    <div className="bg-[#1E2430] border border-white/15 rounded-xl p-4 sm:p-5 space-y-4">
       <div className="text-xs font-mono text-amber-300 text-center">
         {sliderVal < 95
           ? `RAISE ${rooms[activeIdx]} BREAKER TO 100%`
-          : `FLIP ${rooms[activeIdx]} SWITCH TO DIVERT POWER`}
+          : `ENGAGE ${rooms[activeIdx]} CIRCUIT SWITCH`}
       </div>
 
       <div className="grid grid-cols-4 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-700">
-        {rooms.map((rm, idx) => (
-          <div key={rm} className="flex flex-col items-center gap-2">
-            <span className="text-[10px] font-mono text-slate-400">{rm}</span>
-            {idx === activeIdx ? (
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={sliderVal}
-                onChange={(e) => handleSlider(Number(e.target.value))}
-                className="w-full accent-amber-400 cursor-pointer"
-                aria-label={`Divert power to ${rm}`}
-              />
-            ) : (
-              <div className="w-full h-3 bg-slate-800 rounded-full opacity-50 my-2" />
-            )}
-          </div>
-        ))}
+        {rooms.map((rm, idx) => {
+          const isTarget = idx === activeIdx;
+          return (
+            <div
+              key={rm}
+              className={`rounded-lg p-2 text-center border ${
+                isTarget
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                  : 'bg-slate-900 border-white/5 text-slate-500'
+              }`}
+            >
+              <div className="text-[10px] font-mono font-bold truncate">{rm}</div>
+              <div className="font-mono text-xs font-bold mt-1 tabular-nums">
+                {isTarget ? `${sliderVal}%` : 'OFF'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bg-slate-950/70 p-3 rounded-xl border border-white/10 space-y-1.5">
+        <div className="flex items-center justify-between text-xs font-mono text-slate-300">
+          <span>{rooms[activeIdx]} POWER LEVEL</span>
+          <span className="tabular-nums text-amber-400">{sliderVal}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={sliderVal}
+          onChange={(e) => handleSlider(Number(e.target.value))}
+          className="w-full h-11 accent-amber-400 cursor-pointer"
+          aria-label={`Divert power to ${rooms[activeIdx]}`}
+        />
       </div>
 
       <button
@@ -136,9 +182,9 @@ export const DivertPowerTask: React.FC<TaskProps> = ({ onComplete }) => {
           soundEngine.playTaskSuccess();
           setTimeout(onComplete, 300);
         }}
-        className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-400 text-slate-950 font-bold text-sm transition-colors"
+        className="w-full min-h-[48px] py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-400 text-slate-950 font-bold text-sm transition-colors"
       >
-        {sliderVal < 95 ? `Slide ${rooms[activeIdx]} Control First` : `Engage ${rooms[activeIdx]} Circuit`}
+        {sliderVal < 95 ? `Slide ${rooms[activeIdx]} Slider to 100%` : `Engage ${rooms[activeIdx]} Circuit`}
       </button>
     </div>
   );
@@ -147,12 +193,12 @@ export const DivertPowerTask: React.FC<TaskProps> = ({ onComplete }) => {
 // 15. CLEAN O2 FILTER (Short · O2)
 export const CleanO2FilterTask: React.FC<TaskProps> = ({ onComplete }) => {
   const [leaves, setLeaves] = useState([
-    { id: 1, x: 45, y: 20, cleared: false },
-    { id: 2, x: 75, y: 35, cleared: false },
-    { id: 3, x: 55, y: 55, cleared: false },
-    { id: 4, x: 80, y: 72, cleared: false },
-    { id: 5, x: 42, y: 78, cleared: false },
-    { id: 6, x: 65, y: 25, cleared: false },
+    { id: 1, x: 40, y: 22, cleared: false },
+    { id: 2, x: 76, y: 36, cleared: false },
+    { id: 3, x: 52, y: 56, cleared: false },
+    { id: 4, x: 78, y: 74, cleared: false },
+    { id: 5, x: 38, y: 76, cleared: false },
+    { id: 6, x: 65, y: 24, cleared: false },
   ]);
 
   const clearLeaf = (id: number) => {
@@ -175,13 +221,11 @@ export const CleanO2FilterTask: React.FC<TaskProps> = ({ onComplete }) => {
       </div>
 
       <div className="relative h-56 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden flex">
-        {/* Left Vacuum Chute */}
-        <div className="w-16 h-full bg-slate-950 border-r-2 border-cyan-500/40 flex items-center justify-center">
+        <div className="w-14 h-full bg-slate-950 border-r-2 border-cyan-500/40 flex items-center justify-center shrink-0">
           <span className="text-[10px] font-mono text-cyan-400 -rotate-90 whitespace-nowrap">
             VACUUM
           </span>
         </div>
-        {/* Vent Grille */}
         <div className="flex-1 relative">
           {leaves.map((leaf) =>
             leaf.cleared ? null : (
@@ -205,10 +249,10 @@ export const CleanO2FilterTask: React.FC<TaskProps> = ({ onComplete }) => {
 // 16. CHART COURSE (Short · Navigation)
 export const ChartCourseTask: React.FC<TaskProps> = ({ onComplete }) => {
   const waypoints = [
-    { x: 14, y: 72 },
+    { x: 16, y: 72 },
     { x: 38, y: 34 },
     { x: 64, y: 65 },
-    { x: 86, y: 26 },
+    { x: 84, y: 26 },
   ];
   const [step, setStep] = useState(0);
 

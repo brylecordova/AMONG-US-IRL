@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import http from 'http';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -18,8 +20,10 @@ import {
   castMeetingVote,
   completePlayerTask,
   createGameSession,
+  forceStartMeetingDiscussion,
   joinGameSession,
   kickPlayerFromLobby,
+  markPlayerArrived,
   processPlayerBackScan,
   projectForHost,
   projectForPlayer,
@@ -40,7 +44,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 
-function getLanUrls(port: number): string[] {
+function resolveTlsCredentials(): { key: Buffer; cert: Buffer } | null {
+  const keyPath = process.env.SSL_KEY_FILE?.trim() || path.resolve(process.cwd(), 'certs', 'key.pem');
+  const certPath = process.env.SSL_CERT_FILE?.trim() || path.resolve(process.cwd(), 'certs', 'cert.pem');
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    return {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    };
+  }
+  return null;
+}
+
+let activeProtocol: 'http' | 'https' = 'http';
+
+function getLanUrls(port: number, protocol: 'http' | 'https' = activeProtocol): string[] {
   const urls: string[] = [];
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
@@ -48,14 +66,14 @@ function getLanUrls(port: number): string[] {
     if (!addrs) continue;
     for (const net of addrs) {
       if (net.family === 'IPv4' && !net.internal) {
-        urls.push(`http://${net.address}:${port}`);
+        urls.push(`${protocol}://${net.address}:${port}`);
       }
     }
   }
   return urls;
 }
 
-function resolveRequestOrigin(req: express.Request): string {
+function resolveRequestOrigin(req: express.Request, protocol: 'http' | 'https'): string {
   const configured = process.env.APP_URL?.trim();
   if (configured && configured !== 'MY_APP_URL' && /^https?:\/\//i.test(configured)) {
     return configured.replace(/\/+$/, '');
@@ -63,11 +81,11 @@ function resolveRequestOrigin(req: express.Request): string {
   const protoHeader = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
   const hostHeader = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim() || req.headers.host;
   if (hostHeader) {
-    const proto = protoHeader || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : req.protocol);
+    const proto = protoHeader || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? protocol : req.protocol);
     return `${proto}://${hostHeader}`;
   }
-  const lan = getLanUrls(PORT)[0];
-  return lan || `http://localhost:${PORT}`;
+  const lan = getLanUrls(PORT, protocol)[0];
+  return lan || `${protocol}://localhost:${PORT}`;
 }
 
 interface WsClientMeta {
@@ -122,6 +140,9 @@ async function broadcastSessionState(sessionCode: string, event?: { type: string
 
 async function main() {
   await initDatabase();
+  const tlsCreds = resolveTlsCredentials();
+  const serverProtocol: 'http' | 'https' = tlsCreds ? 'https' : 'http';
+  activeProtocol = serverProtocol;
 
   const app = express();
   app.use(express.json({ limit: '64kb' }));
@@ -130,19 +151,20 @@ async function main() {
     res.json({
       ok: true,
       dbMode: getDbMode(),
-      lanUrls: getLanUrls(PORT),
+      protocol: serverProtocol,
+      lanUrls: getLanUrls(PORT, serverProtocol),
     });
   });
 
   // Create a new Host game session
   app.post('/api/sessions', async (req, res) => {
     try {
-      const origin = resolveRequestOrigin(req);
+      const origin = resolveRequestOrigin(req, serverProtocol);
       const { session, hostToken } = await createGameSession(origin);
       res.json({
         sessionCode: session.sessionCode,
         hostToken,
-        state: projectForHost(session, getLanUrls(PORT)),
+        state: projectForHost(session, getLanUrls(PORT, serverProtocol)),
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create session.' });
@@ -282,6 +304,19 @@ async function main() {
     }
   });
 
+  app.post('/api/sessions/:code/host/start-discussion', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const hostToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !hostToken) return res.status(401).json({ error: 'Unauthorized.' });
+      const session = await forceStartMeetingDiscussion(code, hostToken);
+      await broadcastSessionState(code);
+      res.json({ state: projectForHost(session, getLanUrls(PORT)) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to start discussion.' });
+    }
+  });
+
   // Player actions
   app.post('/api/sessions/:code/tasks/complete', async (req, res) => {
     try {
@@ -392,6 +427,20 @@ async function main() {
     }
   });
 
+  app.post('/api/sessions/:code/meeting/arrive', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) return res.status(401).json({ error: 'Unauthorized.' });
+
+      const { session } = await markPlayerArrived(code, playerToken);
+      await broadcastSessionState(code);
+      res.json({ state: projectForPlayer(session, playerToken) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Check-in failed.' });
+    }
+  });
+
   app.post('/api/sessions/:code/meeting/vote', async (req, res) => {
     try {
       const code = sanitizeSessionCode(req.params.code);
@@ -423,7 +472,9 @@ async function main() {
     });
   }
 
-  const server = http.createServer(app);
+  const server = tlsCreds
+    ? https.createServer(tlsCreds, app)
+    : http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', (ws) => {
@@ -530,8 +581,8 @@ async function main() {
   }, 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SERVER] Skeld IRL running on http://0.0.0.0:${PORT}`);
-    const lans = getLanUrls(PORT);
+    console.log(`[SERVER] Skeld IRL running on ${serverProtocol}://0.0.0.0:${PORT}`);
+    const lans = getLanUrls(PORT, serverProtocol);
     if (lans.length > 0) {
       console.log(`[SERVER] Local network URLs for smartphones: ${lans.join(', ')}`);
     }

@@ -244,12 +244,15 @@ export interface AssignedTask {
   completed: boolean;
 }
 
+export type MeetingStage = 'GATHERING' | 'DISCUSSION' | 'VOTING' | 'VERDICT';
+
 export interface PublicPlayer {
   playerId: string;
   name: string;
   color: PlayerColorId;
   alive: boolean;
   connected: boolean;
+  hasArrived: boolean;
   hasVoted: boolean;
   revealedRole?: SecretRole;
 }
@@ -264,6 +267,7 @@ export interface SelfPlayer extends PublicPlayer {
 
 export interface MeetingSummary {
   id: string;
+  stage: MeetingStage;
   reason: 'BODY_REPORTED' | 'EMERGENCY_BUTTON';
   reporterId: string;
   reporterName: string;
@@ -274,6 +278,7 @@ export interface MeetingSummary {
   discussionEndsAt: number;
   votingEndsAt: number;
   verdictEndsAt?: number;
+  arrivedCount: number;
   votesCastCount: number;
   totalAliveCount: number;
   ejectedPlayer?: {

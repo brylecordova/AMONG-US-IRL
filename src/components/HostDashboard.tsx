@@ -103,7 +103,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col">
       {/* Top Bar Contract: 3 zones */}
-      <header className="no-print sticky top-0 z-30 bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 px-6 py-3 flex items-center justify-between gap-8">
+      <header className="no-print sticky top-0 z-30 bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 sm:gap-6">
         <div className="flex items-center gap-4 shrink-0">
           <button
             type="button"
@@ -114,7 +114,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
           </button>
         </div>
 
-        <nav className="flex items-center gap-6 text-sm font-medium">
+        <nav className="order-3 sm:order-2 w-full sm:w-auto flex items-center gap-5 text-sm font-medium overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('CONTROL')}
@@ -150,7 +150,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
           </button>
         </nav>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="order-2 sm:order-3 flex items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={toggleMute}
@@ -316,7 +316,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
 
               {/* Active Meeting Banner */}
               {state.phase === 'MEETING' && state.meeting && (
-                <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 flex items-center justify-between gap-4">
+                <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <ShieldAlert className="w-7 h-7 text-red-400 shrink-0" />
                     <div>
@@ -325,13 +325,25 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                           ? `Dead Body Reported: ${state.meeting.victimName}`
                           : `Emergency Meeting Called by ${state.meeting.reporterName}`}
                       </div>
-                      <div className="text-xs text-red-200 mt-0.5">
+                      <div className="text-xs text-red-200 mt-0.5 font-mono tabular-nums">
                         {state.meeting.verdictMessage
                           ? state.meeting.verdictMessage
-                          : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                          : state.meeting.stage === 'GATHERING'
+                            ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
+                            : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
                       </div>
                     </div>
                   </div>
+                  {state.meeting.stage === 'GATHERING' && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => callHostApi('start-discussion')}
+                      className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap"
+                    >
+                      Start Discussion Now
+                    </button>
+                  )}
                 </div>
               )}
 

@@ -92,6 +92,8 @@ NODE_ENV=production npm start
 
 Open **`http://localhost:3000`** on your Host PC!
 
+> **Troubleshooting (`'tsx' is not recognized` on Windows):** Make sure you ran `npm install` inside the project folder first so `node_modules/.bin/tsx` is installed. If you still see the error, run `npm install tsx` or start the server via `npx tsx server.ts`.
+
 ---
 
 ## Local Network (LAN) & Port Forwarding Guide
@@ -110,7 +112,12 @@ Players join the game from their smartphones, so phones must be able to reach yo
    ```
 2. Paste the public URL (e.g., `https://your-host.example.com` or `http://<public-ip>:3000`) into the **Host Address** field on **Mission Control** and click **Update QR**.
 
-> **Smartphone Camera Note:** iOS Safari and Android Chrome only allow live camera QR scanning (`getUserMedia`) over **`https://`** or **`localhost`**. If you host over plain `http://` LAN or raw IP port forwarding, use an HTTPS tunnel for camera scanning, or have players use the built-in **Manual Code Fallback** (`WIR1`, `RED`, `EMRG`, etc.) right inside the scanner drawer!
+> **Smartphone & Localhost Camera Notes:**
+> - **`localhost` (`http://localhost:3000`):** Browsers allow live camera streaming on `localhost`. If your webcam does not open automatically, ensure camera permission is allowed in your browser's site settings (padlock icon) and click **Retry Camera**.
+> - **LAN IP (`http://192.168.x.x:3000`):** Mobile Safari/Chrome blocks live `getUserMedia` video streams on plain HTTP LAN IP addresses. You still have **two zero-setup ways to play**:
+>   1. Tap **Take Photo of QR Code (HTTP Camera Fallback)** inside the scanner to snap a photo using your phone's native camera.
+>   2. Or type the 3–4 letter manual code (`WIR1`, `RED`, `EMRG`) printed on every QR card.
+> - **Optional Full Live Camera on LAN:** Place TLS certs at `./certs/key.pem` and `./certs/cert.pem` (or set `SSL_KEY_FILE` / `SSL_CERT_FILE` in `.env`)—the server automatically boots in **HTTPS** mode, or use `npx cloudflared tunnel --url http://localhost:3000`.
 
 ---
 
@@ -136,7 +143,7 @@ Players join the game from their smartphones, so phones must be able to reach yo
 - **Completing Tasks**: Walk to a physical Task QR station, tap **Scan Task / Body** on your phone, scan the QR (or type its 4-character manual code), and beat the interactive Skeld mini-game.
 - **Investigating (Investigator only)**: Tap **Investigate** and scan an alive player's back QR to reveal their **Suit Color** and whether they read as **`CREWMATE`** or **`IMPOSTOR`** *(Shapeshifter reads as `CREWMATE`!)*.
 - **Eliminating (Impostors / Shapeshifter)**: Tap **Kill QR** and scan an alive Crewmate's back QR when your kill cooldown is `0s`. Their phone immediately locks with **"YOU HAVE BEEN KILLED"** and enters Ghost Mode (they can still finish tasks silently!).
-- **Reporting & Voting**: Any alive player who discovers a killed player scans the dead player's back QR (or scans the Cafeteria **Emergency Button** QR). Every phone sounds an alarm and opens the **Discussion & Vote** screen.
+- **Reporting & Voting**: Any alive player who discovers a killed player scans the dead player's back QR (or scans the Cafeteria **Emergency Button** QR). Every phone sounds an alarm and opens the **Gathering Check-In** screen—each alive player walks to the meeting table and taps **`HERE!`**. Once all alive players (excluding dead players) have checked in, the **Discussion** countdown and **Voting** begin automatically.
 - **Winning**:
   - **Crewmates Win** by ejecting all Impostors OR reaching **100%** global task completion.
   - **Impostors Win** when alive Impostors equal or outnumber alive Crewmates.

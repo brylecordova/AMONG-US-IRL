@@ -5,6 +5,7 @@ import type {
   AssignedTask,
   GamePhase,
   GameSettings,
+  MeetingStage,
   PlayerColorId,
   SecretRole,
 } from '../src/shared/skeldData.ts';
@@ -24,6 +25,7 @@ export interface StoredPlayer {
 
 export interface StoredMeeting {
   id: string;
+  stage: MeetingStage;
   reason: 'BODY_REPORTED' | 'EMERGENCY_BUTTON';
   reporterId: string;
   reporterName: string;
@@ -34,6 +36,7 @@ export interface StoredMeeting {
   discussionEndsAt: number;
   votingEndsAt: number;
   verdictEndsAt?: number;
+  arrivedPlayerIds: string[];
   votes: Record<string, string>;
   ejectedPlayer?: {
     playerId: string;

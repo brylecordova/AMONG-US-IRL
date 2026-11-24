@@ -86,9 +86,13 @@ export function computeTaskProgress(session: StoredSession): TaskProgress {
 
 function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): MeetingSummary | null {
   if (!meeting) return null;
-  const aliveCount = session.players.filter((p) => p.alive).length;
+  const alivePlayers = session.players.filter((p) => p.alive);
+  const aliveIds = new Set(alivePlayers.map((p) => p.playerId));
+  const arrivedIds = meeting.arrivedPlayerIds || [];
+  const arrivedCount = arrivedIds.filter((id) => aliveIds.has(id)).length;
   return {
     id: meeting.id,
+    stage: meeting.stage || 'DISCUSSION',
     reason: meeting.reason,
     reporterId: meeting.reporterId,
     reporterName: meeting.reporterName,
@@ -99,8 +103,9 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
     discussionEndsAt: meeting.discussionEndsAt,
     votingEndsAt: meeting.votingEndsAt,
     verdictEndsAt: meeting.verdictEndsAt,
+    arrivedCount,
     votesCastCount: Object.keys(meeting.votes).length,
-    totalAliveCount: aliveCount,
+    totalAliveCount: alivePlayers.length,
     ejectedPlayer: meeting.ejectedPlayer ?? null,
     verdictMessage: meeting.verdictMessage,
   };
@@ -108,12 +113,14 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
 
 function projectPublicPlayers(session: StoredSession): PublicPlayer[] {
   const revealAll = session.phase === 'ENDED';
+  const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
   return session.players.map((p) => ({
     playerId: p.playerId,
     name: p.name,
     color: p.color,
     alive: p.alive,
     connected: p.connected,
+    hasArrived: arrivedSet.has(p.playerId),
     hasVoted: Boolean(session.meeting?.votes[p.playerId]),
     ...(revealAll
       ? { revealedRole: p.secretRole }
@@ -137,6 +144,7 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
 
   const killElapsed = Math.floor((now - self.lastKillAt) / 1000);
   const scanElapsed = Math.floor((now - self.lastScanAt) / 1000);
+  const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
 
   return {
     sessionCode: session.sessionCode,
@@ -149,6 +157,7 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
       color: self.color,
       alive: self.alive,
       connected: self.connected,
+      hasArrived: arrivedSet.has(self.playerId),
       hasVoted: Boolean(session.meeting?.votes[self.playerId]),
       secretRole: self.secretRole,
       assignedTasks: self.assignedTasks,
@@ -552,6 +561,7 @@ export async function processPlayerBackScan(
     session.phase = 'MEETING';
     session.meeting = {
       id: randomToken(8),
+      stage: 'GATHERING',
       reason: 'BODY_REPORTED',
       reporterId: scanner.playerId,
       reporterName: scanner.name,
@@ -559,9 +569,9 @@ export async function processPlayerBackScan(
       victimName: target.name,
       victimColor: target.color,
       startedAt: now,
-      discussionEndsAt: now + session.settings.discussionSec * 1000,
-      votingEndsAt:
-        now + (session.settings.discussionSec + session.settings.votingSec) * 1000,
+      discussionEndsAt: 0,
+      votingEndsAt: 0,
+      arrivedPlayerIds: [],
       votes: {},
     };
     await saveSession(session);
@@ -657,16 +667,82 @@ export async function triggerEmergencyButton(
   session.phase = 'MEETING';
   session.meeting = {
     id: randomToken(8),
+    stage: 'GATHERING',
     reason: 'EMERGENCY_BUTTON',
     reporterId: caller.playerId,
     reporterName: caller.name,
     reporterColor: caller.color,
     startedAt: now,
-    discussionEndsAt: now + session.settings.discussionSec * 1000,
-    votingEndsAt:
-      now + (session.settings.discussionSec + session.settings.votingSec) * 1000,
+    discussionEndsAt: 0,
+    votingEndsAt: 0,
+    arrivedPlayerIds: [],
     votes: {},
   };
+  await saveSession(session);
+  return session;
+}
+
+function beginDiscussionStage(session: StoredSession): void {
+  if (!session.meeting || session.meeting.stage !== 'GATHERING') return;
+  const now = Date.now();
+  session.meeting.stage = 'DISCUSSION';
+  session.meeting.discussionEndsAt = now + session.settings.discussionSec * 1000;
+  session.meeting.votingEndsAt =
+    now + (session.settings.discussionSec + session.settings.votingSec) * 1000;
+}
+
+export async function markPlayerArrived(
+  sessionCode: string,
+  playerToken: string,
+): Promise<{ session: StoredSession; startedDiscussion: boolean }> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'MEETING' || !session.meeting) {
+    throw new Error('No emergency meeting is active.');
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+  if (!player.alive) throw new Error('Dead crewmates do not need to check in.');
+
+  if (session.meeting.stage !== 'GATHERING') {
+    return { session, startedDiscussion: false };
+  }
+
+  if (!session.meeting.arrivedPlayerIds) {
+    session.meeting.arrivedPlayerIds = [];
+  }
+  if (!session.meeting.arrivedPlayerIds.includes(player.playerId)) {
+    session.meeting.arrivedPlayerIds.push(player.playerId);
+  }
+
+  const alivePlayers = session.players.filter((p) => p.alive);
+  const allArrived = alivePlayers.every((p) =>
+    session.meeting!.arrivedPlayerIds.includes(p.playerId),
+  );
+
+  let startedDiscussion = false;
+  if (allArrived) {
+    beginDiscussionStage(session);
+    startedDiscussion = true;
+  }
+
+  await saveSession(session);
+  return { session, startedDiscussion };
+}
+
+export async function forceStartMeetingDiscussion(
+  sessionCode: string,
+  hostToken: string,
+): Promise<StoredSession> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.hostToken !== hostToken) throw new Error('Unauthorized host token.');
+  if (session.phase !== 'MEETING' || !session.meeting) {
+    throw new Error('No meeting is active.');
+  }
+
+  beginDiscussionStage(session);
   await saveSession(session);
   return session;
 }
@@ -674,6 +750,8 @@ export async function triggerEmergencyButton(
 function finalizeMeetingVotes(session: StoredSession): void {
   const meeting = session.meeting;
   if (!meeting || meeting.verdictEndsAt) return;
+
+  meeting.stage = 'VERDICT';
 
   const tally = new Map<string, number>();
   for (const voteTarget of Object.values(meeting.votes)) {
@@ -746,6 +824,9 @@ export async function castMeetingVote(
   if (session.phase !== 'MEETING' || !session.meeting) {
     throw new Error('No emergency meeting is active.');
   }
+  if (session.meeting.stage === 'GATHERING') {
+    throw new Error('Wait until all alive crewmates press HERE! at the meeting table.');
+  }
   if (session.meeting.verdictEndsAt) {
     throw new Error('Voting has already concluded.');
   }
@@ -783,8 +864,16 @@ export async function advanceSessionTimers(sessionCode: string): Promise<boolean
   const session = await getSession(sessionCode);
   if (!session || session.phase !== 'MEETING' || !session.meeting) return false;
 
+  // Do not run discussion/voting countdowns while players are physically walking to the table
+  if (session.meeting.stage === 'GATHERING') return false;
+
   const now = Date.now();
   let changed = false;
+
+  if (session.meeting.stage === 'DISCUSSION' && now >= session.meeting.discussionEndsAt) {
+    session.meeting.stage = 'VOTING';
+    changed = true;
+  }
 
   if (!session.meeting.verdictEndsAt && now >= session.meeting.votingEndsAt) {
     finalizeMeetingVotes(session);

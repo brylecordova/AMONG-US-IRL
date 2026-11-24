@@ -212,6 +212,21 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     }
   };
 
+  const handleMarkHere = async () => {
+    soundEngine.playClick();
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/arrive`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${playerToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Check-in failed.');
+    }
+  };
+
   const handleCastVote = async (target: string) => {
     soundEngine.playClick();
     try {
@@ -470,6 +485,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 <div className="mt-2 py-2 px-3 rounded-xl bg-slate-950/80 text-amber-300 font-semibold text-sm">
                   {state.meeting.verdictMessage}
                 </div>
+              ) : state.meeting.stage === 'GATHERING' ? (
+                <div className="font-mono text-xs text-amber-300 tabular-nums pt-1">
+                  HEAD TO MEETING TABLE · {state.meeting.arrivedCount} / {state.meeting.totalAliveCount} ALIVE HERE
+                </div>
               ) : (
                 <div className="font-mono text-xs text-red-200 tabular-nums pt-1">
                   {discussionLeftSec > 0
@@ -479,7 +498,72 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               )}
             </div>
 
-            {!state.meeting.verdictMessage && (
+            {/* GATHERING CHECK-IN STAGE: Players tap HERE! when they reach the meeting table */}
+            {state.meeting.stage === 'GATHERING' && (
+              <div className="space-y-3">
+                {state.self.alive ? (
+                  !state.self.hasArrived ? (
+                    <button
+                      type="button"
+                      onClick={handleMarkHere}
+                      className="w-full min-h-[64px] rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-display text-3xl font-bold tracking-wide shadow-lg transition-transform"
+                    >
+                      HERE!
+                    </button>
+                  ) : (
+                    <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-xl p-4 text-center">
+                      <div className="font-bold text-sm text-emerald-300">
+                        You checked in as HERE!
+                      </div>
+                      <div className="text-xs text-emerald-100/80 mt-1">
+                        Discussion starts automatically once all alive crewmates reach the table.
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  <div className="bg-[#151C28] border border-white/10 rounded-xl p-3 text-center text-xs text-slate-400">
+                    You are Dead. Waiting for alive players to gather at the table.
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {state.players.map((p) => (
+                    <div
+                      key={p.playerId}
+                      className={`px-4 py-3 rounded-xl border flex items-center justify-between gap-3 ${
+                        !p.alive
+                          ? 'bg-red-950/20 border-red-500/20 opacity-55'
+                          : p.hasArrived
+                            ? 'bg-emerald-950/25 border-emerald-500/35'
+                            : 'bg-[#151C28] border-white/10'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <CrewmateAvatar color={p.color} alive={p.alive} size={36} />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-white truncate">{p.name}</div>
+                          <div className="text-xs text-slate-400">{getColorDef(p.color).label}</div>
+                        </div>
+                      </div>
+                      <span
+                        className={`font-mono text-xs font-bold shrink-0 ${
+                          !p.alive
+                            ? 'text-red-400'
+                            : p.hasArrived
+                              ? 'text-emerald-400'
+                              : 'text-amber-300'
+                        }`}
+                      >
+                        {!p.alive ? 'DEAD' : p.hasArrived ? 'HERE!' : 'WALKING...'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* DISCUSSION & VOTING STAGE */}
+            {state.meeting.stage !== 'GATHERING' && !state.meeting.verdictMessage && (
               <div className="space-y-2.5">
                 {state.players.map((p) => {
                   const colorDef = getColorDef(p.color);

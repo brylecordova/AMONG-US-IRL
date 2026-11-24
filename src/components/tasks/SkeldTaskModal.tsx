@@ -77,8 +77,8 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0F1520]">
           <div>
             <h3 className="font-display text-2xl font-bold tracking-wide text-white leading-none">
