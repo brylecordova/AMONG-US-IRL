@@ -112,7 +112,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
             <View style={styles.permissionBox}>
               <Text style={styles.permissionTitle}>Camera Permission Required</Text>
               <Text style={styles.permissionDesc}>
-                Skeld IRL uses your native phone camera to scan QR badges instantly over local Wi-Fi.
+                AMONG-US IRL uses your native phone camera to scan QR badges instantly over local Wi-Fi.
               </Text>
               <TouchableOpacity
                 style={styles.grantBtn}

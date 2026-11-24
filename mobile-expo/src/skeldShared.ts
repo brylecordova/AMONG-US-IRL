@@ -250,6 +250,7 @@ export interface PublicPlayer {
   alive: boolean;
   connected: boolean;
   hasArrived: boolean;
+  hasVotedNow?: boolean;
   hasVoted: boolean;
   revealedRole?: SecretRole;
   rejoinCode?: string;
@@ -263,6 +264,17 @@ export interface SelfPlayer extends PublicPlayer {
   scanCooldownRemainingSec: number;
   sabotageCooldownRemainingSec: number;
   teammates: Array<{ playerId: string; name: string; color: PlayerColorId; role: SecretRole }>;
+}
+
+export interface MeetingVoterBadge {
+  playerId: string;
+  name: string;
+  color: PlayerColorId;
+}
+
+export interface MeetingVoteReveal {
+  byTarget: Record<string, MeetingVoterBadge[]>;
+  skipped: MeetingVoterBadge[];
 }
 
 export interface MeetingSummary {
@@ -279,8 +291,10 @@ export interface MeetingSummary {
   votingEndsAt: number;
   verdictEndsAt?: number;
   arrivedCount: number;
+  voteNowCount?: number;
   votesCastCount: number;
   totalAliveCount: number;
+  voteBreakdown?: MeetingVoteReveal;
   ejectedPlayer?: {
     playerId: string;
     name: string;

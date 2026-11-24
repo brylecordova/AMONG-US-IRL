@@ -1,6 +1,6 @@
-# Skeld IRL — Native Mobile Client (React Native / Expo)
+# AMONG-US IRL — Native Mobile Client (React Native / Expo)
 
-Native Android & iOS companion app for **Skeld IRL** powered by **`expo-camera`**.
+Native Android & iOS companion app for **AMONG-US IRL** powered by **`expo-camera`**.
 Why use the Expo app on Android? Android phones block live browser camera scanning over plain `http://192.168.x.x:3000` LAN addresses, whereas this native Expo client grants full live rear-camera QR scanning over plain LAN HTTP without needing HTTPS certificates or ngrok.
 
 ---
@@ -22,7 +22,7 @@ Why use the Expo app on Android? Android phones block live browser camera scanni
 
 3. Install **Expo Go** from the Google Play Store (Android) or App Store (iOS) on players' phones (connected to the same Wi-Fi), and scan the Expo CLI QR code.
 
-4. Inside the **Skeld IRL** mobile app:
+4. Inside the **AMONG-US IRL** mobile app:
    - Tap **Scan Host PC Join QR Code** and point the camera at the **Join Mission** QR on your Host PC screen—this auto-fills both your Host PC URL (`http://192.168.x.x:3000`) and Mission Code.
    - Or manually type your Host Server URL + Mission Code, pick your suit color, and tap **Join Mission**.
 

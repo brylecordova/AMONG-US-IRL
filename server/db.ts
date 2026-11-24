@@ -39,6 +39,7 @@ export interface StoredMeeting {
   votingEndsAt: number;
   verdictEndsAt?: number;
   arrivedPlayerIds: string[];
+  voteNowPlayerIds?: string[];
   votes: Record<string, string>;
   ejectedPlayer?: {
     playerId: string;
@@ -113,13 +114,22 @@ function flushCacheToLocalFile(): void {
 
 export async function initDatabase(): Promise<'mongodb' | 'local-fallback'> {
   const configuredUri = process.env.MONGODB_URI?.trim();
-  const candidateUri = configuredUri || 'mongodb://127.0.0.1:27017';
   const dbName = process.env.MONGODB_DB_NAME?.trim() || 'skeld_irl';
 
+  if (!configuredUri) {
+    mongoClient = null;
+    mongoDb = null;
+    sessionsCollection = null;
+    dbMode = 'local-fallback';
+    loadLocalFileIntoCache();
+    console.log('[DB] MONGODB_URI not configured; active with persistent local JSON store (.skeld-data/sessions.json)');
+    return dbMode;
+  }
+
   try {
-    const client = new MongoClient(candidateUri, {
-      serverSelectionTimeoutMS: configuredUri ? 4000 : 1500,
-      connectTimeoutMS: configuredUri ? 4000 : 1500,
+    const client = new MongoClient(configuredUri, {
+      serverSelectionTimeoutMS: 2500,
+      connectTimeoutMS: 2500,
     });
     await client.connect();
     await client.db(dbName).command({ ping: 1 });

@@ -4,25 +4,32 @@ import QRCode from 'qrcode';
 interface QrCodeImgProps {
   value: string;
   size?: number;
+  renderSize?: number;
+  responsive?: boolean;
   className?: string;
   alt?: string;
+  darkColor?: string;
 }
 
 export const QrCodeImg: React.FC<QrCodeImgProps> = ({
   value,
   size = 200,
+  renderSize,
+  responsive = false,
   className = '',
   alt = 'QR Code',
+  darkColor = '#0B0F17',
 }) => {
   const [dataUrl, setDataUrl] = useState<string>('');
+  const pixelWidth = renderSize ?? size;
 
   useEffect(() => {
     let active = true;
     QRCode.toDataURL(value, {
-      width: size,
+      width: pixelWidth,
       margin: 2,
       color: {
-        dark: '#0B0F17',
+        dark: darkColor,
         light: '#FFFFFF',
       },
       errorCorrectionLevel: 'M',
@@ -37,13 +44,13 @@ export const QrCodeImg: React.FC<QrCodeImgProps> = ({
     return () => {
       active = false;
     };
-  }, [value, size]);
+  }, [value, pixelWidth, darkColor]);
 
   if (!dataUrl) {
     return (
       <div
-        style={{ width: size, height: size }}
-        className={`bg-white/10 animate-pulse rounded-lg ${className}`}
+        style={responsive ? undefined : { width: size, height: size }}
+        className={`bg-white/10 animate-pulse rounded-lg ${responsive ? 'w-full h-full' : ''} ${className}`}
       />
     );
   }
@@ -51,10 +58,10 @@ export const QrCodeImg: React.FC<QrCodeImgProps> = ({
   return (
     <img
       src={dataUrl}
-      width={size}
-      height={size}
+      width={responsive ? undefined : size}
+      height={responsive ? undefined : size}
       alt={alt}
-      className={`rounded-lg bg-white p-1.5 ${className}`}
+      className={`rounded-lg bg-white p-1.5 ${responsive ? 'w-full h-full object-contain' : ''} ${className}`}
     />
   );
 };

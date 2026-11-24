@@ -6,6 +6,8 @@ import {
   getColorDef,
   HostGameState,
   MeetingSummary,
+  MeetingVoterBadge,
+  MeetingVoteReveal,
   PLAYER_COLORS,
   PlayerColorId,
   PublicAlignment,
@@ -76,7 +78,7 @@ function sanitizeSettings(raw: Partial<GameSettings> | undefined, existing: Game
       90,
       existing.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec,
     ),
-    discussionSec: clamp(raw?.discussionSec, 10, 120, existing.discussionSec),
+    discussionSec: clamp(raw?.discussionSec, 0, 120, existing.discussionSec),
     votingSec: clamp(raw?.votingSec, 15, 180, existing.votingSec),
     confirmEjects: typeof raw?.confirmEjects === 'boolean' ? raw.confirmEjects : existing.confirmEjects,
     hideManualCodes:
@@ -114,9 +116,35 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
   const aliveIds = new Set(alivePlayers.map((p) => p.playerId));
   const arrivedIds = meeting.arrivedPlayerIds || [];
   const arrivedCount = arrivedIds.filter((id) => aliveIds.has(id)).length;
+  const voteNowIds = meeting.voteNowPlayerIds || [];
+  const voteNowCount = voteNowIds.filter((id) => aliveIds.has(id)).length;
+  const stage = meeting.stage || 'DISCUSSION';
+
+  let voteBreakdown: MeetingVoteReveal | undefined;
+  if (stage === 'VERDICT') {
+    const byTarget: Record<string, MeetingVoterBadge[]> = {};
+    const skipped: MeetingVoterBadge[] = [];
+    for (const [voterId, targetId] of Object.entries(meeting.votes)) {
+      const voter = session.players.find((p) => p.playerId === voterId);
+      if (!voter) continue;
+      const badge: MeetingVoterBadge = {
+        playerId: voter.playerId,
+        name: voter.name,
+        color: voter.color,
+      };
+      if (targetId === 'SKIP') {
+        skipped.push(badge);
+      } else {
+        if (!byTarget[targetId]) byTarget[targetId] = [];
+        byTarget[targetId].push(badge);
+      }
+    }
+    voteBreakdown = { byTarget, skipped };
+  }
+
   return {
     id: meeting.id,
-    stage: meeting.stage || 'DISCUSSION',
+    stage,
     reason: meeting.reason,
     reporterId: meeting.reporterId,
     reporterName: meeting.reporterName,
@@ -128,8 +156,10 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
     votingEndsAt: meeting.votingEndsAt,
     verdictEndsAt: meeting.verdictEndsAt,
     arrivedCount,
+    voteNowCount,
     votesCastCount: Object.keys(meeting.votes).length,
     totalAliveCount: alivePlayers.length,
+    ...(voteBreakdown ? { voteBreakdown } : {}),
     ejectedPlayer: meeting.ejectedPlayer ?? null,
     verdictMessage: meeting.verdictMessage,
   };
@@ -138,6 +168,7 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
 function projectPublicPlayers(session: StoredSession, includeRejoinCodes = false): PublicPlayer[] {
   const revealAll = session.phase === 'ENDED';
   const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
+  const voteNowSet = new Set(session.meeting?.voteNowPlayerIds || []);
   return session.players.map((p) => ({
     playerId: p.playerId,
     name: p.name,
@@ -145,6 +176,7 @@ function projectPublicPlayers(session: StoredSession, includeRejoinCodes = false
     alive: p.alive,
     connected: p.connected,
     hasArrived: arrivedSet.has(p.playerId),
+    hasVotedNow: voteNowSet.has(p.playerId),
     hasVoted: Boolean(session.meeting?.votes[p.playerId]),
     ...(includeRejoinCodes ? { rejoinCode: p.rejoinCode } : {}),
     ...(revealAll
@@ -172,6 +204,7 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
   const sabotageCooldownSec = session.settings.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec;
   const sabotageElapsed = session.lastSabotageAt ? Math.floor((now - session.lastSabotageAt) / 1000) : sabotageCooldownSec;
   const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
+  const voteNowSet = new Set(session.meeting?.voteNowPlayerIds || []);
 
   return {
     sessionCode: session.sessionCode,
@@ -186,6 +219,7 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
       alive: self.alive,
       connected: self.connected,
       hasArrived: arrivedSet.has(self.playerId),
+      hasVotedNow: voteNowSet.has(self.playerId),
       hasVoted: Boolean(session.meeting?.votes[self.playerId]),
       secretRole: self.secretRole,
       assignedTasks: self.assignedTasks,
@@ -681,6 +715,12 @@ export type ScanBackOutcome =
       victimColor: PlayerColorId;
     }
   | {
+      kind: 'DEAD_BODY_FOUND';
+      session: StoredSession;
+      victimName: string;
+      victimColor: PlayerColorId;
+    }
+  | {
       kind: 'BODY_REPORTED';
       session: StoredSession;
       victimName: string;
@@ -727,8 +767,17 @@ export async function processPlayerBackScan(
     throw new Error('You cannot scan your own back badge.');
   }
 
-  // 1. Dead body scan ALWAYS triggers a body report Emergency Meeting (unless explicit kill attempt)
+  // 1. Dead body scan: first show "Call Emergency Meeting" button; only trigger meeting when mode === 'REPORT'
   if (!target.alive) {
+    if (mode !== 'REPORT') {
+      return {
+        kind: 'DEAD_BODY_FOUND',
+        session,
+        victimName: target.name,
+        victimColor: target.color,
+      };
+    }
+
     const now = Date.now();
     session.phase = 'MEETING';
     session.activeSabotage = null;
@@ -745,6 +794,7 @@ export async function processPlayerBackScan(
       discussionEndsAt: 0,
       votingEndsAt: 0,
       arrivedPlayerIds: [],
+      voteNowPlayerIds: [],
       votes: {},
     };
     await saveSession(session);
@@ -859,6 +909,7 @@ export async function triggerEmergencyButton(
     discussionEndsAt: 0,
     votingEndsAt: 0,
     arrivedPlayerIds: [],
+    voteNowPlayerIds: [],
     votes: {},
   };
   await saveSession(session);
@@ -868,10 +919,17 @@ export async function triggerEmergencyButton(
 function beginDiscussionStage(session: StoredSession): void {
   if (!session.meeting || session.meeting.stage !== 'GATHERING') return;
   const now = Date.now();
-  session.meeting.stage = 'DISCUSSION';
-  session.meeting.discussionEndsAt = now + session.settings.discussionSec * 1000;
-  session.meeting.votingEndsAt =
-    now + (session.settings.discussionSec + session.settings.votingSec) * 1000;
+  session.meeting.voteNowPlayerIds = [];
+  if (session.settings.discussionSec <= 0) {
+    session.meeting.stage = 'VOTING';
+    session.meeting.discussionEndsAt = now;
+    session.meeting.votingEndsAt = now + session.settings.votingSec * 1000;
+  } else {
+    session.meeting.stage = 'DISCUSSION';
+    session.meeting.discussionEndsAt = now + session.settings.discussionSec * 1000;
+    session.meeting.votingEndsAt =
+      now + (session.settings.discussionSec + session.settings.votingSec) * 1000;
+  }
 }
 
 export async function markPlayerArrived(
@@ -930,6 +988,47 @@ export async function forceStartMeetingDiscussion(
   return session;
 }
 
+export async function agreeVoteNow(
+  sessionCode: string,
+  playerToken: string,
+): Promise<{ session: StoredSession; skippedDiscussion: boolean }> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'MEETING' || !session.meeting) {
+    throw new Error('No emergency meeting is active.');
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+  if (!player.alive) throw new Error('Dead crewmates cannot vote to skip discussion.');
+
+  if (session.meeting.stage !== 'DISCUSSION') {
+    return { session, skippedDiscussion: false };
+  }
+
+  if (!session.meeting.voteNowPlayerIds) {
+    session.meeting.voteNowPlayerIds = [];
+  }
+  if (!session.meeting.voteNowPlayerIds.includes(player.playerId)) {
+    session.meeting.voteNowPlayerIds.push(player.playerId);
+  }
+
+  const alivePlayers = session.players.filter((p) => p.alive);
+  const allAgreed = alivePlayers.every((p) =>
+    session.meeting!.voteNowPlayerIds!.includes(p.playerId),
+  );
+
+  if (allAgreed) {
+    const now = Date.now();
+    session.meeting.stage = 'VOTING';
+    session.meeting.discussionEndsAt = now;
+    session.meeting.votingEndsAt = now + session.settings.votingSec * 1000;
+  }
+
+  await saveSession(session);
+  return { session, skippedDiscussion: allAgreed };
+}
+
 function finalizeMeetingVotes(session: StoredSession): void {
   const meeting = session.meeting;
   if (!meeting || meeting.verdictEndsAt) return;
@@ -962,7 +1061,7 @@ function finalizeMeetingVotes(session: StoredSession): void {
     meeting.verdictMessage = isTie
       ? 'Vote tied. No one was ejected.'
       : 'Crew skipped the vote. No one was ejected.';
-    meeting.verdictEndsAt = now + 4500;
+    meeting.verdictEndsAt = now + 7500;
     return;
   }
 
@@ -970,7 +1069,7 @@ function finalizeMeetingVotes(session: StoredSession): void {
   if (!ejected) {
     meeting.ejectedPlayer = null;
     meeting.verdictMessage = 'No valid target ejected.';
-    meeting.verdictEndsAt = now + 4500;
+    meeting.verdictEndsAt = now + 7500;
     return;
   }
 
@@ -994,7 +1093,7 @@ function finalizeMeetingVotes(session: StoredSession): void {
     meeting.verdictMessage = `${ejected.name} was ejected.`;
   }
 
-  meeting.verdictEndsAt = now + 5000;
+  meeting.verdictEndsAt = now + 7500;
 }
 
 export async function castMeetingVote(
@@ -1015,7 +1114,7 @@ export async function castMeetingVote(
   }
 
   const now = Date.now();
-  if (now < session.meeting.discussionEndsAt) {
+  if (session.meeting.stage === 'DISCUSSION' && now < session.meeting.discussionEndsAt) {
     const waitSec = Math.ceil((session.meeting.discussionEndsAt - now) / 1000);
     throw new Error(`Discussion phase active. Voting opens in ${waitSec}s.`);
   }

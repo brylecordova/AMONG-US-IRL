@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Skeld IRL",
-    "slug": "skeld-irl",
+    "name": "AMONG-US IRL",
+    "slug": "among-us-irl",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0B0F17",
     "android": {
-      "package": "com.skeld.irl",
+      "package": "com.amongus.irl",
       "permissions": [
         "android.permission.CAMERA"
       ],
@@ -16,17 +16,17 @@
       }
     },
     "ios": {
-      "bundleIdentifier": "com.skeld.irl",
+      "bundleIdentifier": "com.amongus.irl",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Allow Skeld IRL to use the rear camera to scan Task, Player Back, Emergency Meeting, and Host Join QR codes."
+        "NSCameraUsageDescription": "Allow AMONG-US IRL to use the rear camera to scan Task, Player Back, Emergency Meeting, and Host Join QR codes."
       }
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Skeld IRL to scan Task, Player, and Emergency Meeting QR codes."
+          "cameraPermission": "Allow AMONG-US IRL to scan Task, Player, and Emergency Meeting QR codes."
         }
       ]
     ]

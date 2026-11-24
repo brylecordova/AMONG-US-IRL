@@ -554,23 +554,23 @@ export default function App() {
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.1, type: 'spring', stiffness: 260, damping: 24 }}
-              viewBox="0 0 360 76"
-              className="w-full max-w-[340px] h-auto"
+              viewBox="0 0 420 76"
+              className="w-full max-w-[380px] h-auto"
               role="img"
-              aria-label="SKELD IRL"
+              aria-label="AMONG-US IRL"
             >
               <rect x="2" y="10" width="46" height="54" rx="14" fill="#EF4444" stroke="#0F172A" strokeWidth="3" />
               <rect x="20" y="20" width="26" height="16" rx="8" fill="#7DD3FC" stroke="#0F172A" strokeWidth="2.5" />
               <text
                 x="64"
-                y="56"
+                y="55"
                 fill="#FFFFFF"
                 fontFamily="Barlow Condensed, sans-serif"
                 fontWeight="700"
-                fontSize="56"
+                fontSize="52"
                 letterSpacing="2"
               >
-                SKELD IRL
+                AMONG-US IRL
               </text>
             </motion.svg>
 

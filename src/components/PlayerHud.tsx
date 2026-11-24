@@ -27,6 +27,7 @@ import {
   SkeldTaskDef,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
+import { SkeldTaskIconBadge } from './PrintedQrCards';
 import { QrScannerModal } from './QrScannerModal';
 import { RoleSplashModal } from './RoleSplashModal';
 import { SkeldTaskModal } from './tasks/SkeldTaskModal';
@@ -67,6 +68,12 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalUnlocked, setTerminalUnlocked] = useState(false);
   const [showKilledModal, setShowKilledModal] = useState(false);
+  const [deadBodyFound, setDeadBodyFound] = useState<{
+    victimName: string;
+    victimColor: PlayerColorId;
+  } | null>(null);
+  const [reportingBody, setReportingBody] = useState(false);
+  const [voteNowBusy, setVoteNowBusy] = useState(false);
   const [forensicResult, setForensicResult] = useState<ForensicBanner | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [muted, setMuted] = useState(soundEngine.isMuted());
@@ -109,6 +116,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       soundEngine.playKillAlert();
       setActiveTask(null);
       setScannerMode(null);
+      setDeadBodyFound(null);
       setShowKilledModal(true);
     }
   }, [killedAlertTrigger]);
@@ -119,6 +127,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       soundEngine.playEmergencyAlarm();
       setActiveTask(null);
       setScannerMode(null);
+      setDeadBodyFound(null);
     }
   }, [meetingAlertTrigger]);
 
@@ -153,6 +162,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     if (state.phase !== 'PLAYING') {
       setShowTerminal(false);
       setTerminalUnlocked(false);
+      setDeadBodyFound(null);
     }
 
     if (
@@ -260,6 +270,12 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         if (outcome.kind === 'KILL_EXECUTED') {
           soundEngine.playKillAlert();
           showToast(`Eliminated ${outcome.victimName} (${getColorDef(outcome.victimColor).label}).`);
+        } else if (outcome.kind === 'DEAD_BODY_FOUND') {
+          soundEngine.playClick();
+          setDeadBodyFound({
+            victimName: outcome.victimName,
+            victimColor: outcome.victimColor,
+          });
         } else if (outcome.kind === 'INVESTIGATE_RESULT') {
           soundEngine.playInvestigateScan();
           setForensicResult({
@@ -373,6 +389,52 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       showToast(err instanceof Error ? err.message : 'Unable to switch suit color.');
     } finally {
       setColorBusy(false);
+    }
+  };
+
+  const handleReportDeadBody = async () => {
+    if (!deadBodyFound || reportingBody) return;
+    soundEngine.playClick();
+    setReportingBody(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/scan-player`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({
+          targetColor: deadBodyFound.victimColor,
+          mode: 'REPORT',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setDeadBodyFound(null);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to report dead body.');
+    } finally {
+      setReportingBody(false);
+    }
+  };
+
+  const handleVoteNow = async () => {
+    if (voteNowBusy) return;
+    soundEngine.playClick();
+    setVoteNowBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/vote-now`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${playerToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Vote Now failed.');
+    } finally {
+      setVoteNowBusy(false);
     }
   };
 
@@ -665,12 +727,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                         animate={{ opacity: 1, y: 0 }}
                         className="p-3 rounded-xl border-2 border-amber-400/70 bg-amber-500/15 flex items-center justify-between gap-3"
                       >
-                        <div className="min-w-0">
-                          <div className="font-semibold text-sm text-amber-200">
-                            Emergency Repair: Fix Wiring
-                          </div>
-                          <div className="text-xs text-amber-100/80 mt-0.5">
-                            Electrical · Available to anyone alive during Blackout
+                        <div className="flex items-center gap-3 min-w-0">
+                          <SkeldTaskIconBadge taskId="fix-wiring" size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-amber-200">
+                              Emergency Repair: Fix Wiring
+                            </div>
+                            <div className="text-xs text-amber-100/80 mt-0.5">
+                              Electrical · Available to anyone alive during Blackout
+                            </div>
                           </div>
                         </div>
                         <span className="font-mono text-xs font-bold text-amber-300 shrink-0">
@@ -699,30 +764,33 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                               : 'bg-slate-950/60 border-white/10'
                         }`}
                       >
-                        <div className="min-w-0">
-                          <div className="font-semibold text-sm text-white flex items-center gap-2">
-                            <span
-                              className={
-                                isBlackoutWiring
-                                  ? 'text-amber-200'
-                                  : item.completed
-                                    ? 'line-through text-emerald-300'
-                                    : ''
-                              }
-                            >
-                              {def.name}
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                            <span>{def.room}</span>
-                            <span aria-hidden="true">·</span>
-                            <span>{def.tier}</span>
-                            {def.isVisual && (
-                              <>
-                                <span aria-hidden="true">·</span>
-                                <span className="text-cyan-300">Visual</span>
-                              </>
-                            )}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <SkeldTaskIconBadge taskId={item.taskId} size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-white flex items-center gap-2">
+                              <span
+                                className={
+                                  isBlackoutWiring
+                                    ? 'text-amber-200'
+                                    : item.completed
+                                      ? 'line-through text-emerald-300'
+                                      : ''
+                                }
+                              >
+                                {def.name}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
+                              <span>{def.room}</span>
+                              <span aria-hidden="true">·</span>
+                              <span>{def.tier}</span>
+                              {def.isVisual && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="text-cyan-300">Visual</span>
+                                </>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -798,11 +866,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 <div className="font-mono text-xs text-amber-300 tabular-nums pt-1">
                   HEAD TO MEETING TABLE · {state.meeting.arrivedCount} / {state.meeting.totalAliveCount} ALIVE HERE
                 </div>
+              ) : state.meeting.stage === 'DISCUSSION' ? (
+                <div className="font-mono text-xs text-red-200 tabular-nums pt-1">
+                  DISCUSSION PHASE · VOTING OPENS IN {discussionLeftSec}s
+                </div>
               ) : (
                 <div className="font-mono text-xs text-red-200 tabular-nums pt-1">
-                  {discussionLeftSec > 0
-                    ? `DISCUSSION PHASE · VOTING OPENS IN ${discussionLeftSec}s`
-                    : `VOTING OPEN · ${votingLeftSec}s REMAINING`}
+                  VOTING OPEN · {votingLeftSec}s REMAINING
                 </div>
               )}
             </div>
@@ -881,16 +951,45 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               </div>
             )}
 
-            {/* DISCUSSION & VOTING STAGE */}
-            {state.meeting.stage !== 'GATHERING' && !state.meeting.verdictMessage && (
+            {/* DISCUSSION, VOTING & VERDICT (WITH VOTE REVEAL) */}
+            {state.meeting.stage !== 'GATHERING' && (
               <div className="space-y-2.5">
+                {/* Vote Now bar during Discussion */}
+                {state.meeting.stage === 'DISCUSSION' && state.self.alive && (
+                  <div className="pb-1">
+                    {!state.self.hasVotedNow ? (
+                      <motion.button
+                        type="button"
+                        disabled={voteNowBusy}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={handleVoteNow}
+                        className="w-full min-h-[50px] px-4 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-60 text-slate-950 font-bold text-sm flex items-center justify-between gap-2 shadow-lg"
+                      >
+                        <span>Vote Now (Skip Discussion)</span>
+                        <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-950/15 tabular-nums">
+                          {state.meeting.voteNowCount}/{state.meeting.totalAliveCount}
+                        </span>
+                      </motion.button>
+                    ) : (
+                      <div className="w-full px-4 py-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-200 text-xs font-semibold flex items-center justify-between gap-2">
+                        <span>Agreed to Vote Now — Waiting for remaining crew...</span>
+                        <span className="font-mono font-bold tabular-nums">
+                          {state.meeting.voteNowCount}/{state.meeting.totalAliveCount}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {state.players.map((p, idx) => {
                   const colorDef = getColorDef(p.color);
                   const canVoteTarget =
+                    state.meeting?.stage === 'VOTING' &&
                     state.self.alive &&
                     !state.self.hasVoted &&
-                    discussionLeftSec === 0 &&
                     p.alive;
+                  const votersForPlayer = state.meeting?.voteBreakdown?.byTarget[p.playerId] || [];
+
                   return (
                     <motion.button
                       key={p.playerId}
@@ -901,61 +1000,111 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       whileTap={canVoteTarget ? { scale: 0.98 } : undefined}
                       disabled={!canVoteTarget}
                       onClick={() => handleCastVote(p.playerId)}
-                      className={`w-full min-h-[58px] px-4 py-3 rounded-xl border flex items-center justify-between gap-3 text-left ${
+                      className={`w-full min-h-[58px] px-4 py-3 rounded-xl border flex flex-col gap-2 text-left ${
                         !p.alive
-                          ? 'bg-red-950/20 border-red-500/20 opacity-55'
+                          ? 'bg-red-950/20 border-red-500/20 opacity-65'
                           : canVoteTarget
                             ? 'bg-[#151C28] hover:bg-[#1E293B] border-white/15 cursor-pointer'
-                            : 'bg-[#151C28] border-white/10 opacity-80'
+                            : 'bg-[#151C28] border-white/10 opacity-90'
                       }`}
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <CrewmateAvatar color={p.color} alive={p.alive} size={38} />
-                        <div className="min-w-0">
-                          <div className="font-semibold text-sm text-white truncate">
-                            {p.name}
+                      <div className="w-full flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <CrewmateAvatar color={p.color} alive={p.alive} size={38} />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-white truncate">
+                              {p.name}
+                            </div>
+                            <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                              <span>{colorDef.label}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className={p.alive ? 'text-emerald-400' : 'text-red-400'}>
+                                {p.alive ? 'Alive' : 'Dead'}
+                              </span>
+                            </div>
                           </div>
-                          <div className="text-xs text-slate-400 flex items-center gap-1.5">
-                            <span>{colorDef.label}</span>
-                            <span aria-hidden="true">·</span>
-                            <span className={p.alive ? 'text-emerald-400' : 'text-red-400'}>
-                              {p.alive ? 'Alive' : 'Dead'}
+                        </div>
+
+                        <div className="text-xs font-mono shrink-0">
+                          {state.meeting?.stage === 'DISCUSSION' && p.hasVotedNow ? (
+                            <span className="px-2 py-1 rounded-md bg-amber-400/20 text-amber-300 font-bold">
+                              VOTE NOW
                             </span>
-                          </div>
+                          ) : state.meeting?.stage === 'VOTING' && p.hasVoted ? (
+                            <span className="text-emerald-400 font-bold">I VOTED</span>
+                          ) : canVoteTarget ? (
+                            <span className="px-3 py-1.5 rounded-lg bg-red-500 text-white font-bold">
+                              Vote
+                            </span>
+                          ) : null}
                         </div>
                       </div>
 
-                      <div className="text-xs font-mono shrink-0">
-                        {p.hasVoted ? (
-                          <span className="text-emerald-400 font-bold">VOTED</span>
-                        ) : canVoteTarget ? (
-                          <span className="px-3 py-1.5 rounded-lg bg-red-500 text-white font-bold">
-                            Vote
-                          </span>
-                        ) : null}
-                      </div>
+                      {/* Among Us style voter icons shown in Verdict */}
+                      {votersForPlayer.length > 0 && (
+                        <div className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5">
+                          {votersForPlayer.map((voter) => (
+                            <span
+                              key={voter.playerId}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-950/80 border border-white/10 text-[11px] text-slate-200"
+                            >
+                              <CrewmateAvatar color={voter.color} size={18} />
+                              <span>{voter.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </motion.button>
                   );
                 })}
 
-                {state.self.alive && !state.self.hasVoted && discussionLeftSec === 0 && (
+                {/* Skip Vote option during VOTING */}
+                {state.meeting.stage === 'VOTING' && state.self.alive && !state.self.hasVoted && (
                   <motion.button
                     type="button"
                     whileTap={{ scale: 0.98 }}
                     onClick={() => handleCastVote('SKIP')}
-                    className="w-full min-h-[48px] rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm"
+                    className="w-full min-h-[50px] px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-white font-bold text-sm flex items-center justify-between"
                   >
-                    Skip Vote
+                    <span>Skip Vote</span>
+                    <span className="text-xs font-normal text-slate-300">Do not eject anyone</span>
                   </motion.button>
                 )}
 
-                {state.self.hasVoted && (
+                {/* Skipped Votes reveal row in Verdict */}
+                {state.meeting.voteBreakdown && (
+                  <div className="px-4 py-3 rounded-xl bg-[#151C28] border border-white/10 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-300">Skipped Votes</span>
+                      <span className="font-mono text-slate-400">
+                        {state.meeting.voteBreakdown.skipped.length}
+                      </span>
+                    </div>
+                    {state.meeting.voteBreakdown.skipped.length > 0 ? (
+                      <div className="flex items-center flex-wrap gap-1.5">
+                        {state.meeting.voteBreakdown.skipped.map((voter) => (
+                          <span
+                            key={voter.playerId}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-950/80 border border-white/10 text-[11px] text-slate-200"
+                          >
+                            <CrewmateAvatar color={voter.color} size={18} />
+                            <span>{voter.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500">No crewmates skipped.</div>
+                    )}
+                  </div>
+                )}
+
+                {state.meeting.stage === 'VOTING' && state.self.hasVoted && (
                   <div className="text-center text-xs font-mono text-emerald-400 py-2">
                     Vote locked. Waiting for remaining alive crewmates...
                   </div>
                 )}
 
-                {!state.self.alive && (
+                {!state.self.alive && state.meeting.stage !== 'VERDICT' && (
                   <div className="text-center text-xs text-slate-400 py-2">
                     You are a Ghost. Observe the meeting silently without voting.
                   </div>
@@ -1365,6 +1514,66 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 className="w-full py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm"
               >
                 Close Readout
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* DEAD BODY FOUND — CALL EMERGENCY MEETING PROMPT */}
+      <AnimatePresence>
+        {deadBodyFound && state.phase === 'PLAYING' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+              className="w-full max-w-sm bg-[#1B0D12] border-2 border-red-500 rounded-2xl p-6 text-center space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-center gap-2 text-red-400 font-mono text-xs font-bold">
+                <ShieldAlert className="w-4 h-4" />
+                <span>DEAD BODY FOUND</span>
+              </div>
+
+              <CrewmateAvatar color={deadBodyFound.victimColor} alive={false} size={86} className="mx-auto" />
+
+              <div>
+                <div className="font-display text-3xl font-bold text-white">
+                  {deadBodyFound.victimName}
+                </div>
+                <div className="text-sm text-slate-300 mt-0.5">
+                  Suit Color:{' '}
+                  <span className="font-bold text-white">
+                    {getColorDef(deadBodyFound.victimColor).label}
+                  </span>{' '}
+                  · Eliminated
+                </div>
+              </div>
+
+              <motion.button
+                type="button"
+                disabled={reportingBody}
+                whileTap={{ scale: 0.97 }}
+                onClick={handleReportDeadBody}
+                className="w-full min-h-[54px] py-3 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white font-display text-2xl font-bold tracking-wide flex items-center justify-center gap-2 shadow-lg"
+              >
+                <ShieldAlert className="w-5 h-5" />
+                <span>{reportingBody ? 'CALLING MEETING...' : 'CALL EMERGENCY MEETING'}</span>
+              </motion.button>
+
+              <button
+                type="button"
+                disabled={reportingBody}
+                onClick={() => setDeadBodyFound(null)}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-xs"
+              >
+                Dismiss (Do Not Report)
               </button>
             </motion.div>
           </motion.div>

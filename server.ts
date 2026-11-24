@@ -16,6 +16,7 @@ import {
 } from './server/db.ts';
 import {
   advanceSessionTimers,
+  agreeVoteNow,
   castMeetingVote,
   changePlayerColorInLobby,
   completePlayerTask,
@@ -470,7 +471,7 @@ async function main() {
             victimColor: outcome.victimColor,
           },
         });
-      } else {
+      } else if (outcome.kind !== 'DEAD_BODY_FOUND') {
         await broadcastSessionState(code);
       }
 
@@ -478,6 +479,9 @@ async function main() {
         outcome: {
           kind: outcome.kind,
           ...(outcome.kind === 'KILL_EXECUTED'
+            ? { victimName: outcome.victimName, victimColor: outcome.victimColor }
+            : {}),
+          ...(outcome.kind === 'DEAD_BODY_FOUND'
             ? { victimName: outcome.victimName, victimColor: outcome.victimColor }
             : {}),
           ...(outcome.kind === 'BODY_REPORTED'
@@ -533,6 +537,20 @@ async function main() {
       res.json({ state: projectForPlayer(session, playerToken) });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Check-in failed.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/meeting/vote-now', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) return res.status(401).json({ error: 'Unauthorized.' });
+
+      const { session, skippedDiscussion } = await agreeVoteNow(code, playerToken);
+      await broadcastSessionState(code);
+      res.json({ state: projectForPlayer(session, playerToken), skippedDiscussion });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Vote Now failed.' });
     }
   });
 

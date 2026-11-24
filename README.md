@@ -1,8 +1,8 @@
-# Skeld IRL
+# AMONG-US IRL
 
 A real-time, QR-powered real-life **Among Us** social deduction game built with **Node.js, Express, WebSockets, React, TypeScript, Tailwind CSS, and MongoDB**.
 
-Turn any house, campus floor, office, or backyard into **The Skeld**. One host PC runs Mission Control and prints QR cards for tasks and player backs, while players join from their smartphone browsers to complete 16 interactive *Among Us* task mini-games, investigate suspects, report bodies, and vote in emergency meetings.
+Turn any house, campus floor, office, or backyard into **The Skeld**. One host PC runs Mission Control and prints QR cards for tasks and player backs, while players join from their smartphone browsers (or the companion Expo app) to complete 16 interactive *Among Us* task mini-games, investigate suspects, report bodies, and vote in emergency meetings.
 
 ---
 
@@ -11,10 +11,10 @@ Turn any house, campus floor, office, or backyard into **The Skeld**. One host P
 - **Host PC Command Center & Print Studio**
   - Displays a live **Join Mission QR Code** for instant smartphone onboarding.
   - Supports **LAN IP auto-detection** and custom **Port-Forwarded / Public URLs** so remote friends can join seamlessly.
-  - Built-in `@media print` **QR Print Studio** to print:
-    - **12 Player Suit Back Badges** (worn on players' backs for kills, Investigator scans, and dead body reports)
-    - **16 Skeld Task Station Cards**
-    - **Cafeteria Emergency Meeting Button Card**
+  - Built-in `@media print` **QR Print Studio** (with **Save Printable HTML** export fallback) to print:
+    - **12 Player Suit Back Badges** (printed 2 per page with oversized QR codes—worn on players' backs for kills, Investigator scans, and dead body reports)
+    - **16 Skeld Task Station Cards** (custom room-themed cards with unique icons, printed 4 per page)
+    - **Cafeteria Emergency Meeting Button Card** (printed full crewmate-badge size)
 - **16 Authentic Skeld Task Mini-Games**
   - Interactive touch-first replicas of *The Skeld* base map tasks complete with original room and tier (`COMMON`, `SHORT`, `LONG`) designations and visual-task indicators.
 - **Hidden Roles & Social Deduction Mechanics**
@@ -44,8 +44,8 @@ Turn any house, campus floor, office, or backyard into **The Skeld**. One host P
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/<your-username>/skeld-irl.git
-cd skeld-irl
+git clone https://github.com/<your-username>/among-us-irl.git
+cd among-us-irl
 ```
 
 ### 2. Install Dependencies
@@ -165,7 +165,7 @@ Players join the game from their smartphones, so phones must be able to reach yo
 1. In **Rules & Balance**, set:
    - **Impostors**: `1` or `2` *(2 Impostors requires at least 4 players and automatically makes 1 Impostor the **Shapeshifter**)*.
    - **Investigators**: `0`, `1`, or `2`.
-   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Sabotage Cooldown**, **Voting Time**, **Confirm Ejects**, and **Hide Manual Codes (Anti-Remote Kill)** *(hides short codes from printed sheets and scanner input so Impostors must scan physical QR badges up close)*.
+   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Sabotage Cooldown**, **Discussion Time**, **Voting Time**, **Confirm Ejects**, and **Hide Manual Codes (Anti-Remote Kill)** *(hides short codes from printed sheets and scanner input so Impostors must scan physical QR badges up close)*.
 2. Players scan the **Join Mission QR Code** on the Host PC screen (via the Expo app or smartphone browser), enter their callsign, and pick the **Suit Color** matching the printed QR badge on their back.
 3. Click **Launch Mission**! Every phone plays the **SHHHHH! -> Role Reveal** splash screen, then switches to the **Plain Crewmate Stealth HUD**.
 
@@ -176,7 +176,7 @@ Players join the game from their smartphones, so phones must be able to reach yo
   - **Kill Power (Blackout)**: Locks all regular tasks until an alive player scans and completes **Fix Wiring (`WIR1`)** to restore grid power.
   - **Signal Jam (60s)**: Disables the Cafeteria **Emergency Meeting (`EMRG`)** button for 60 seconds (dead body reports still work).
 - **Rejoining After Page Refresh**: Every player receives a unique 5-character **Player Rejoin Code** (shown in Lobby/Terminal and on the Host PC's Crew Manifest). If a player refreshes or disconnects, choose **Rejoin Game** and enter the **Mission Code** + **Player Rejoin Code** to restore their session.
-- **Reporting & Voting**: Any alive player who discovers a killed player scans the dead player's back QR (or scans the Cafeteria **Emergency Button** QR). Every phone sounds an alarm and opens the **Gathering Check-In** screen—each alive player walks to the meeting table and taps **`HERE!`**. Once all alive players (excluding dead players) have checked in, the **Discussion** countdown and **Voting** begin automatically.
+- **Reporting, Discussion & Voting**: Any alive player who scans a dead player's back QR receives a **Dead Body Found** prompt with a **Call Emergency Meeting** button (or players can scan the Cafeteria **Emergency Button** QR). Every phone sounds an alarm and opens **Gathering Check-In**—once all alive players tap **`HERE!`**, **Discussion** begins (players can agree via **Vote Now** to skip discussion early once everyone consents). During **Voting**, alive players vote for a suspect or click **Skip Vote**, and the **Verdict** reveals who voted for whom before ejection.
 - **Winning**:
   - **Crewmates Win** by ejecting all Impostors OR reaching **100%** global task completion.
   - **Impostors Win** when alive Impostors equal or outnumber alive Crewmates.

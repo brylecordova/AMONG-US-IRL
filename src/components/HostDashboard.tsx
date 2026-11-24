@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Check,
+  Download,
   Printer,
   Radio,
   RotateCcw,
@@ -14,9 +15,6 @@ import {
   ZapOff,
 } from 'lucide-react';
 import {
-  buildMeetingQrPayload,
-  buildPlayerQrPayload,
-  buildTaskQrPayload,
   GameSettings,
   getColorDef,
   HostGameState,
@@ -24,7 +22,13 @@ import {
   SKELD_TASKS,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
+import {
+  PrintedEmergencyQrCard,
+  PrintedPlayerBadgeCard,
+  PrintedTaskQrCard,
+} from './PrintedQrCards';
 import { QrCodeImg } from './QrCodeImg';
+import { SmoothSlider } from './SmoothSlider';
 import { soundEngine } from '../utils/sound';
 
 interface HostDashboardProps {
@@ -48,8 +52,10 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [urlInput, setUrlInput] = useState(state.publicUrl);
   const [urlSaved, setUrlSaved] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(soundEngine.isMuted());
+  const printSheetRef = React.useRef<HTMLDivElement | null>(null);
 
   const joinUrl = `${state.publicUrl}/?join=${state.sessionCode}`;
 
@@ -85,8 +91,37 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     setTimeout(() => setUrlSaved(false), 1800);
   };
 
-  const updateSettings = (patch: Partial<GameSettings>) => {
-    callHostApi('settings', patch);
+  const settingsSeqRef = React.useRef(0);
+
+  const updateSettings = async (patch: Partial<GameSettings>) => {
+    const seq = ++settingsSeqRef.current;
+    setErrorMsg(null);
+    onUpdateState({
+      ...state,
+      settings: {
+        ...state.settings,
+        ...patch,
+      },
+    });
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/host/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${hostToken}`,
+        },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update settings');
+      }
+      if (data.state && seq === settingsSeqRef.current) {
+        onUpdateState(data.state);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to update settings');
+    }
   };
 
   const toggleMute = () => {
@@ -103,8 +138,177 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
       ? PLAYER_COLORS.filter((c) => state.players.some((p) => p.color === c.id))
       : PLAYER_COLORS;
 
+  const chunkItems = <T,>(items: T[], size: number): T[][] => {
+    const pages: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+      pages.push(items.slice(i, i + size));
+    }
+    return pages;
+  };
+
+  const crewBadgePages = chunkItems(playersToPrint, 2);
+  const taskCardPages = chunkItems(SKELD_TASKS, 4);
+  const showBadgesSection =
+    printFilter === 'ALL' ||
+    printFilter === 'PLAYERS_ALL' ||
+    printFilter === 'PLAYERS_JOINED';
+  const showTasksSection = printFilter === 'ALL' || printFilter === 'TASKS';
+  const showMeetingSection = printFilter === 'ALL' || printFilter === 'MEETING';
+
+  const collectDocumentCss = () => {
+    const chunks: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const rules = Array.from(sheet.cssRules);
+        chunks.push(rules.map((r) => r.cssText).join('\n'));
+      } catch {
+        // Cross-origin stylesheet (e.g. Google Fonts) is re-linked below
+      }
+    }
+    return chunks.join('\n');
+  };
+
+  const buildPrintableHtmlDocument = (sheetEl: HTMLElement) => {
+    const safeCode = state.sessionCode.replace(/[^A-Z0-9_-]/gi, '');
+    const compiledCss = collectDocumentCss();
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AMONG-US IRL Printable QR Sheets - ${safeCode}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+${compiledCss}
+      html, body {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        margin: 0;
+        padding: 0;
+      }
+      .export-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: #0f172a;
+        color: #f8fafc;
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.12);
+      }
+      .export-toolbar button {
+        background: #10b981;
+        color: #052e16;
+        border: none;
+        border-radius: 8px;
+        padding: 9px 16px;
+        font-weight: 700;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .export-container {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .print-only-sheet h3 {
+        color: #0f172a !important;
+      }
+      .print-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      @media print {
+        .export-toolbar { display: none !important; }
+        .export-container { max-width: none; padding: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="export-toolbar no-print">
+      <div>
+        <strong style="font-family: var(--font-display); font-size: 20px; letter-spacing: 0.04em;">AMONG-US IRL — PRINTABLE QR SHEETS</strong>
+        <span style="margin-left: 12px; font-size: 12px; color: #94a3b8;">Session ${safeCode}</span>
+      </div>
+      <button type="button" onclick="window.print()">Print / Save as PDF</button>
+    </div>
+    <div class="export-container">
+      ${sheetEl.outerHTML}
+    </div>
+    <script>
+      window.addEventListener('load', function () {
+        if (window.self === window.top) {
+          setTimeout(function () { window.print(); }, 350);
+        }
+      });
+    </script>
+  </body>
+</html>`;
+  };
+
+  const downloadPrintableSheet = (reason: 'FALLBACK' | 'MANUAL') => {
+    const sheetEl = printSheetRef.current;
+    if (!sheetEl) {
+      setErrorMsg('Switch to Print QR Studio first so the cards are rendered.');
+      return;
+    }
+    const html = buildPrintableHtmlDocument(sheetEl);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `among-us-irl-qr-sheets-${state.sessionCode}.html`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    if (reason === 'FALLBACK') {
+      setPrintNotice(
+        `Browser print is blocked inside embedded preview windows. Downloaded among-us-irl-qr-sheets-${state.sessionCode}.html — open it in your browser to print or save as PDF.`,
+      );
+    } else {
+      setPrintNotice(
+        `Saved among-us-irl-qr-sheets-${state.sessionCode}.html — open the downloaded file in any browser to print or save as PDF.`,
+      );
+    }
+  };
+
+  const handlePrintSheets = () => {
+    setErrorMsg(null);
+    setPrintNotice(null);
+
+    let beforePrintFired = false;
+    const onBeforePrint = () => {
+      beforePrintFired = true;
+    };
+    window.addEventListener('beforeprint', onBeforePrint, { once: true });
+
+    try {
+      window.print();
+    } catch {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      downloadPrintableSheet('FALLBACK');
+      return;
+    }
+
+    window.setTimeout(() => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      if (!beforePrintFired) {
+        downloadPrintableSheet('FALLBACK');
+      }
+    }, 350);
+  };
+
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col">
+    <div className="print-root min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col">
       {/* Top Bar Contract: 3 zones */}
       <header className="no-print sticky top-0 z-30 bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 sm:gap-6">
         <div className="flex items-center gap-4 shrink-0">
@@ -113,7 +317,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
             onClick={onExitHost}
             className="font-display text-2xl font-bold tracking-wide text-white whitespace-nowrap hover:text-cyan-300 transition-colors"
           >
-            SKELD IRL
+            AMONG-US IRL
           </button>
         </div>
 
@@ -356,34 +560,95 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                     initial={{ opacity: 0, scale: 0.97 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.97 }}
-                    className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4"
+                    className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 space-y-3"
                   >
-                    <div className="flex items-center gap-3">
-                      <ShieldAlert className="w-7 h-7 text-red-400 shrink-0 animate-pulse" />
-                      <div>
-                        <div className="font-display text-xl font-bold text-white">
-                          {state.meeting.reason === 'BODY_REPORTED'
-                            ? `Dead Body Reported: ${state.meeting.victimName}`
-                            : `Emergency Meeting Called by ${state.meeting.reporterName}`}
-                        </div>
-                        <div className="text-xs text-red-200 mt-0.5 font-mono tabular-nums">
-                          {state.meeting.verdictMessage
-                            ? state.meeting.verdictMessage
-                            : state.meeting.stage === 'GATHERING'
-                              ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
-                              : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <ShieldAlert className="w-7 h-7 text-red-400 shrink-0 animate-pulse" />
+                        <div>
+                          <div className="font-display text-xl font-bold text-white">
+                            {state.meeting.reason === 'BODY_REPORTED'
+                              ? `Dead Body Reported: ${state.meeting.victimName}`
+                              : `Emergency Meeting Called by ${state.meeting.reporterName}`}
+                          </div>
+                          <div className="text-xs text-red-200 mt-0.5 font-mono tabular-nums">
+                            {state.meeting.verdictMessage
+                              ? state.meeting.verdictMessage
+                              : state.meeting.stage === 'GATHERING'
+                                ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
+                                : state.meeting.stage === 'DISCUSSION'
+                                  ? `Discussion · Vote Now Agreed: ${state.meeting.voteNowCount} / ${state.meeting.totalAliveCount}`
+                                  : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                          </div>
                         </div>
                       </div>
+                      {state.meeting.stage === 'GATHERING' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => callHostApi('start-discussion')}
+                          className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap"
+                        >
+                          Start Discussion Now
+                        </button>
+                      )}
                     </div>
-                    {state.meeting.stage === 'GATHERING' && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => callHostApi('start-discussion')}
-                        className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap"
-                      >
-                        Start Discussion Now
-                      </button>
+
+                    {state.meeting.voteBreakdown && (
+                      <div className="pt-3 border-t border-red-500/30 space-y-2">
+                        <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-red-200/90">
+                          Vote Breakdown
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {state.players
+                            .filter((p) => (state.meeting?.voteBreakdown?.byTarget[p.playerId]?.length || 0) > 0)
+                            .map((target) => {
+                              const voters = state.meeting?.voteBreakdown?.byTarget[target.playerId] || [];
+                              return (
+                                <div
+                                  key={target.playerId}
+                                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <CrewmateAvatar color={target.color} alive={target.alive} size={24} />
+                                    <span className="text-xs font-semibold text-white truncate">
+                                      {target.name}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1 flex-wrap justify-end">
+                                    {voters.map((v) => (
+                                      <span
+                                        key={v.playerId}
+                                        title={v.name}
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
+                                      >
+                                        <CrewmateAvatar color={v.color} size={16} />
+                                        <span>{v.name}</span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                        {state.meeting.voteBreakdown.skipped.length > 0 && (
+                          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10">
+                            <span className="text-xs font-semibold text-slate-300">Skipped Vote</span>
+                            <div className="flex items-center gap-1 flex-wrap justify-end">
+                              {state.meeting.voteBreakdown.skipped.map((v) => (
+                                <span
+                                  key={v.playerId}
+                                  title={v.name}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
+                                >
+                                  <CrewmateAvatar color={v.color} size={16} />
+                                  <span>{v.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </motion.div>
                 )}
@@ -496,7 +761,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
 
       {/* TAB 2: PRINT QR STUDIO */}
       {activeTab === 'PRINT' && (
-        <main className="max-w-7xl w-full mx-auto p-6 space-y-6">
+        <main className="max-w-7xl w-full mx-auto p-6 space-y-6 print:p-0 print:max-w-none">
           <div className="no-print bg-[#151C28] border border-white/10 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="font-display text-2xl font-bold text-white">Printable QR Studio</h2>
@@ -530,7 +795,15 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
               ))}
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => downloadPrintableSheet('MANUAL')}
+                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-white/15 text-slate-100 font-semibold text-xs flex items-center gap-2 whitespace-nowrap"
+              >
+                <Download className="w-4 h-4" />
+                <span>Save Printable HTML</span>
+              </button>
+              <button
+                type="button"
+                onClick={handlePrintSheets}
                 className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 whitespace-nowrap"
               >
                 <Printer className="w-4 h-4" />
@@ -539,112 +812,94 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
             </div>
           </div>
 
-          <div className="print-only-sheet space-y-8">
-            {/* Player Back QR Badges */}
-            {(printFilter === 'ALL' ||
-              printFilter === 'PLAYERS_ALL' ||
-              printFilter === 'PLAYERS_JOINED') && (
-              <section className="space-y-4">
-                <h3 className="font-display text-xl font-bold text-white print:text-slate-900">
+          {printNotice && (
+            <div className="no-print bg-cyan-500/15 border border-cyan-400/40 text-cyan-100 px-4 py-3 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-4">
+              <span>{printNotice}</span>
+              <button
+                type="button"
+                onClick={() => setPrintNotice(null)}
+                className="text-xs font-semibold underline shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          <div ref={printSheetRef} className="print-only-sheet space-y-8 print:space-y-0">
+            {/* Player Back QR Badges — 3-col on screen, 2 per page on print */}
+            {showBadgesSection && (
+              <section className="space-y-4 print:space-y-2">
+                <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
                   Player Back Badges — Wear on Back ({playersToPrint.length})
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 print:grid-cols-2">
-                  {playersToPrint.map((color) => {
-                    const joinedPlayer = state.players.find((p) => p.color === color.id);
-                    return (
-                      <div
-                        key={color.id}
-                        className="print-card bg-white text-slate-900 rounded-2xl border-2 border-slate-300 p-5 flex flex-col items-center text-center gap-3"
-                      >
-                        <div className="flex items-center justify-between w-full">
-                          <span className="font-mono text-xs font-bold text-slate-500">
-                            SESSION {state.sessionCode}
-                          </span>
-                          {!state.settings.hideManualCodes && (
-                            <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-100 border border-slate-300">
-                              CODE: {color.code}
-                            </span>
-                          )}
-                        </div>
-                        <QrCodeImg
-                          value={buildPlayerQrPayload(state.sessionCode, color.id)}
-                          size={200}
-                          alt={`${color.label} back badge QR`}
-                        />
-                        <div className="flex items-center gap-3">
-                          <CrewmateAvatar color={color.id} size={42} />
-                          <div className="text-left">
-                            <div className="font-display text-2xl font-bold leading-none">
-                              {color.label.toUpperCase()} SUIT
-                            </div>
-                            <div className="text-xs text-slate-600 mt-0.5">
-                              {joinedPlayer ? `Assigned: ${joinedPlayer.name}` : 'Back Badge · Kill / Scan / Report'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {/* 16 Skeld Task Cards */}
-            {(printFilter === 'ALL' || printFilter === 'TASKS') && (
-              <section className="space-y-4">
-                <h3 className="font-display text-xl font-bold text-white print:text-slate-900">
-                  The Skeld Task Station Cards (16 Tasks)
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 print:grid-cols-3">
-                  {SKELD_TASKS.map((task) => (
+                <div className="print-block-container grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 print:space-y-0">
+                  {crewBadgePages.map((pageColors, pageIdx) => (
                     <div
-                      key={task.id}
-                      className="print-card bg-white text-slate-900 rounded-2xl border-2 border-slate-300 p-4 flex flex-col items-center text-center gap-2.5"
+                      key={`crew-page-${pageIdx}`}
+                      className="contents print-page-crew print-page-break"
                     >
-                      <div className="w-full flex items-center justify-between text-[11px] font-mono font-bold text-slate-600">
-                        <span>{task.room}</span>
-                        <span>{task.tier}</span>
-                      </div>
-                      <QrCodeImg
-                        value={buildTaskQrPayload(state.sessionCode, task.id)}
-                        size={155}
-                        alt={`${task.name} QR`}
-                      />
-                      <div>
-                        <div className="font-display text-xl font-bold leading-tight">
-                          {task.name}
-                        </div>
-                        {!state.settings.hideManualCodes && (
-                          <div className="font-mono text-xs font-bold text-slate-600 mt-0.5">
-                            MANUAL CODE: {task.shortCode}
-                          </div>
-                        )}
-                      </div>
+                      {pageColors.map((color) => {
+                        const joinedPlayer = state.players.find((p) => p.color === color.id);
+                        return (
+                          <PrintedPlayerBadgeCard
+                            key={color.id}
+                            sessionCode={state.sessionCode}
+                            color={color}
+                            joinedPlayerName={joinedPlayer?.name}
+                            hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                          />
+                        );
+                      })}
                     </div>
                   ))}
                 </div>
               </section>
             )}
 
-            {/* Emergency Meeting Cafeteria Button */}
-            {(printFilter === 'ALL' || printFilter === 'MEETING') && (
-              <section className="space-y-4">
-                <h3 className="font-display text-xl font-bold text-white print:text-slate-900">
+            {/* 16 Skeld Task Cards — 4-col on screen, 4 per page (2x2) on print */}
+            {showTasksSection && (
+              <section
+                className={`space-y-4 print:space-y-2 ${
+                  showBadgesSection ? 'print:break-before-page' : ''
+                }`}
+              >
+                <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
+                  The Skeld Task Station Cards (16 Tasks)
+                </h3>
+                <div className="print-block-container grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 print:space-y-0">
+                  {taskCardPages.map((pageTasks, pageIdx) => (
+                    <div
+                      key={`task-page-${pageIdx}`}
+                      className="contents print-page-quad print-page-break"
+                    >
+                      {pageTasks.map((task) => (
+                        <PrintedTaskQrCard
+                          key={task.id}
+                          sessionCode={state.sessionCode}
+                          task={task}
+                          hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Emergency Meeting Cafeteria Button — max-w-sm on screen, crewmate-badge size on print */}
+            {showMeetingSection && (
+              <section
+                className={`space-y-4 print:space-y-2 ${
+                  showBadgesSection || showTasksSection ? 'print:break-before-page' : ''
+                }`}
+              >
+                <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
                   Cafeteria Emergency Meeting Station
                 </h3>
-                <div className="max-w-sm print-card bg-white text-slate-900 rounded-2xl border-4 border-red-600 p-6 flex flex-col items-center text-center gap-3">
-                  <div className="font-display text-2xl font-bold text-red-600">
-                    EMERGENCY MEETING BUTTON
-                  </div>
-                  <QrCodeImg
-                    value={buildMeetingQrPayload(state.sessionCode)}
-                    size={190}
-                    alt="Emergency Meeting QR"
-                  />
-                  <div className="font-mono text-xs font-bold text-slate-700">
-                    CAFETERIA{state.settings.hideManualCodes ? '' : ' · MANUAL CODE: EMRG'}
-                  </div>
-                </div>
+                <PrintedEmergencyQrCard
+                  sessionCode={state.sessionCode}
+                  hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                />
               </section>
             )}
           </div>
@@ -721,101 +976,91 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
               </div>
 
               {/* Tasks Per Player */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-white">Tasks Per Player</span>
-                  <span className="font-mono text-sm font-bold text-emerald-400 tabular-nums">
-                    {state.settings.tasksPerPlayer}
-                  </span>
-                </div>
-                <input
-                  type="range"
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Tasks Per Player"
+                  value={state.settings.tasksPerPlayer}
                   min={2}
                   max={10}
+                  step={1}
+                  accent="emerald"
                   disabled={state.phase !== 'LOBBY'}
-                  value={state.settings.tasksPerPlayer}
-                  onChange={(e) => updateSettings({ tasksPerPlayer: Number(e.target.value) })}
-                  className="w-full accent-emerald-400"
+                  onChangeCommit={(val) => updateSettings({ tasksPerPlayer: val })}
                 />
               </div>
 
               {/* Kill Cooldown */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-white">Kill Cooldown</span>
-                  <span className="font-mono text-sm font-bold text-red-400 tabular-nums">
-                    {state.settings.killCooldownSec}s
-                  </span>
-                </div>
-                <input
-                  type="range"
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Kill Cooldown"
+                  value={state.settings.killCooldownSec}
                   min={10}
                   max={60}
-                  step={5}
+                  step={1}
+                  accent="red"
                   disabled={state.phase !== 'LOBBY'}
-                  value={state.settings.killCooldownSec}
-                  onChange={(e) => updateSettings({ killCooldownSec: Number(e.target.value) })}
-                  className="w-full accent-red-500"
+                  formatValue={(v) => `${v}s`}
+                  onChangeCommit={(val) => updateSettings({ killCooldownSec: val })}
                 />
               </div>
 
               {/* Investigator Scan Cooldown */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-white">Investigator Scan Cooldown</span>
-                  <span className="font-mono text-sm font-bold text-cyan-400 tabular-nums">
-                    {state.settings.scanCooldownSec}s
-                  </span>
-                </div>
-                <input
-                  type="range"
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Investigator Scan Cooldown"
+                  value={state.settings.scanCooldownSec}
                   min={10}
                   max={60}
-                  step={5}
+                  step={1}
+                  accent="cyan"
                   disabled={state.phase !== 'LOBBY'}
-                  value={state.settings.scanCooldownSec}
-                  onChange={(e) => updateSettings({ scanCooldownSec: Number(e.target.value) })}
-                  className="w-full accent-cyan-400"
+                  formatValue={(v) => `${v}s`}
+                  onChangeCommit={(val) => updateSettings({ scanCooldownSec: val })}
                 />
               </div>
 
               {/* Sabotage Cooldown */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-white">Sabotage Cooldown</span>
-                  <span className="font-mono text-sm font-bold text-orange-400 tabular-nums">
-                    {state.settings.sabotageCooldownSec ?? 30}s
-                  </span>
-                </div>
-                <input
-                  type="range"
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Sabotage Cooldown"
+                  value={state.settings.sabotageCooldownSec ?? 30}
                   min={10}
                   max={90}
-                  step={5}
+                  step={1}
+                  accent="orange"
                   disabled={state.phase !== 'LOBBY'}
-                  value={state.settings.sabotageCooldownSec ?? 30}
-                  onChange={(e) => updateSettings({ sabotageCooldownSec: Number(e.target.value) })}
-                  className="w-full accent-orange-400"
+                  formatValue={(v) => `${v}s`}
+                  onChangeCommit={(val) => updateSettings({ sabotageCooldownSec: val })}
                 />
               </div>
 
-              {/* Discussion & Voting Time */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-white">Voting Time</span>
-                  <span className="font-mono text-sm font-bold text-amber-400 tabular-nums">
-                    {state.settings.votingSec}s
-                  </span>
-                </div>
-                <input
-                  type="range"
+              {/* Discussion Time */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Discussion Time"
+                  value={state.settings.discussionSec}
+                  min={0}
+                  max={120}
+                  step={1}
+                  accent="amber"
+                  disabled={state.phase !== 'LOBBY'}
+                  formatValue={(v) => (v === 0 ? '0s (Skip)' : `${v}s`)}
+                  onChangeCommit={(val) => updateSettings({ discussionSec: val })}
+                />
+              </div>
+
+              {/* Voting Time */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10">
+                <SmoothSlider
+                  label="Voting Time"
+                  value={state.settings.votingSec}
                   min={20}
                   max={120}
-                  step={10}
+                  step={1}
+                  accent="amber"
                   disabled={state.phase !== 'LOBBY'}
-                  value={state.settings.votingSec}
-                  onChange={(e) => updateSettings({ votingSec: Number(e.target.value) })}
-                  className="w-full accent-amber-400"
+                  formatValue={(v) => `${v}s`}
+                  onChangeCommit={(val) => updateSettings({ votingSec: val })}
                 />
               </div>
             </div>

@@ -61,6 +61,12 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalUnlocked, setTerminalUnlocked] = useState(false);
   const [showKilledModal, setShowKilledModal] = useState(false);
+  const [deadBodyFound, setDeadBodyFound] = useState<{
+    victimName: string;
+    victimColor: PlayerColorId;
+  } | null>(null);
+  const [reportingBody, setReportingBody] = useState(false);
+  const [voteNowBusy, setVoteNowBusy] = useState(false);
   const [forensicResult, setForensicResult] = useState<ForensicResult | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sabotageBusy, setSabotageBusy] = useState(false);
@@ -123,6 +129,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       Vibration.vibrate([0, 300, 120, 400]);
       setActiveTask(null);
       setShowScanner(false);
+      setDeadBodyFound(null);
       setShowKilledModal(true);
     }
   }, [killedAlertTrigger]);
@@ -132,6 +139,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       Vibration.vibrate([0, 220, 120, 220]);
       setActiveTask(null);
       setShowScanner(false);
+      setDeadBodyFound(null);
     }
   }, [meetingAlertTrigger]);
 
@@ -164,6 +172,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
     if (state.phase !== 'PLAYING') {
       setShowTerminal(false);
       setTerminalUnlocked(false);
+      setDeadBodyFound(null);
     }
 
     if (
@@ -254,6 +263,11 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         if (outcome.kind === 'KILL_EXECUTED') {
           Vibration.vibrate(180);
           showToast(`Eliminated ${outcome.victimName} (${outcome.victimColor.toUpperCase()}).`);
+        } else if (outcome.kind === 'DEAD_BODY_FOUND') {
+          setDeadBodyFound({
+            victimName: outcome.victimName,
+            victimColor: outcome.victimColor,
+          });
         } else if (outcome.kind === 'INVESTIGATE_RESULT') {
           setForensicResult({
             targetName: outcome.targetName,
@@ -323,6 +337,47 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       showToast(err instanceof Error ? err.message : 'Sabotage failed.');
     } finally {
       setSabotageBusy(false);
+    }
+  };
+
+  const handleReportDeadBody = async () => {
+    if (!deadBodyFound || reportingBody) return;
+    setReportingBody(true);
+    try {
+      const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/scan-player`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ targetColor: deadBodyFound.victimColor, mode: 'REPORT' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setDeadBodyFound(null);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to report body.');
+    } finally {
+      setReportingBody(false);
+    }
+  };
+
+  const handleVoteNow = async () => {
+    if (voteNowBusy) return;
+    setVoteNowBusy(true);
+    try {
+      const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/vote-now`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${playerToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Vote Now failed.');
+    } finally {
+      setVoteNowBusy(false);
     }
   };
 
@@ -654,6 +709,32 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
               </View>
             ) : null}
 
+            {state.meeting.stage === 'DISCUSSION' && state.self.alive ? (
+              <View style={{ marginTop: 14 }}>
+                <TouchableOpacity
+                  disabled={Boolean(state.self.hasVotedNow) || voteNowBusy}
+                  style={[
+                    styles.hereBtn,
+                    {
+                      backgroundColor: state.self.hasVotedNow ? '#1E293B' : '#F59E0B',
+                    },
+                  ]}
+                  onPress={handleVoteNow}
+                >
+                  <Text
+                    style={[
+                      styles.hereBtnText,
+                      { color: state.self.hasVotedNow ? '#4ADE80' : '#020617' },
+                    ]}
+                  >
+                    {state.self.hasVotedNow
+                      ? `VOTE NOW AGREED (${state.meeting.voteNowCount ?? 0}/${state.meeting.totalAliveCount})`
+                      : `VOTE NOW (${state.meeting.voteNowCount ?? 0}/${state.meeting.totalAliveCount})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
             {state.meeting.stage === 'VOTING' && state.self.alive ? (
               <View style={{ gap: 8, marginTop: 14 }}>
                 {state.players
@@ -708,6 +789,44 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 <Text style={styles.verdictText}>
                   {state.meeting.verdictMessage || 'Tallying votes...'}
                 </Text>
+
+                {state.meeting.voteBreakdown ? (
+                  <View style={{ width: '100%', gap: 8, marginTop: 14 }}>
+                    {state.players
+                      .filter((p) => (state.meeting?.voteBreakdown?.byTarget[p.playerId]?.length || 0) > 0)
+                      .map((target) => (
+                        <View key={target.playerId} style={styles.voteRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <AnimatedCrewmate color={target.color} alive={target.alive} size={24} />
+                            <Text style={styles.taskName}>{target.name}</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                            {(state.meeting?.voteBreakdown?.byTarget[target.playerId] || []).map((v) => (
+                              <View key={v.playerId} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <AnimatedCrewmate color={v.color} size={18} />
+                                <Text style={{ color: '#CBD5E1', fontSize: 11 }}>{v.name}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      ))}
+                    <View style={styles.voteRow}>
+                      <Text style={styles.taskName}>Skipped</Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                        {state.meeting.voteBreakdown.skipped.length > 0 ? (
+                          state.meeting.voteBreakdown.skipped.map((v) => (
+                            <View key={v.playerId} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                              <AnimatedCrewmate color={v.color} size={18} />
+                              <Text style={{ color: '#CBD5E1', fontSize: 11 }}>{v.name}</Text>
+                            </View>
+                          ))
+                        ) : (
+                          <Text style={{ color: '#64748B', fontSize: 11 }}>None</Text>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -958,6 +1077,46 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 onPress={() => setForensicResult(null)}
               >
                 <Text style={styles.scanActionText}>Dismiss Report</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+
+      {/* DEAD BODY FOUND MODAL */}
+      <Modal visible={Boolean(deadBodyFound) && state.phase === 'PLAYING'} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          {deadBodyFound ? (
+            <View style={[styles.modalCard, { borderColor: '#EF4444' }]}>
+              <Text style={[styles.kicker, { color: '#EF4444', textAlign: 'center' }]}>
+                DEAD BODY FOUND
+              </Text>
+              <View style={{ alignItems: 'center', marginVertical: 14 }}>
+                <AnimatedCrewmate color={deadBodyFound.victimColor} alive={false} size={80} />
+                <Text style={[styles.panelTitle, { marginTop: 10 }]}>
+                  {deadBodyFound.victimName}
+                </Text>
+                <Text style={styles.panelSub}>
+                  Suit Color: {getColorDef(deadBodyFound.victimColor).label}
+                </Text>
+              </View>
+              <TouchableOpacity
+                disabled={reportingBody}
+                style={[styles.scanActionBtn, { backgroundColor: '#EF4444', marginBottom: 10 }]}
+                onPress={handleReportDeadBody}
+              >
+                <Text style={[styles.scanActionText, { color: '#FFFFFF' }]}>
+                  {reportingBody ? 'CALLING MEETING...' : 'CALL EMERGENCY MEETING'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={reportingBody}
+                style={styles.leaveBtn}
+                onPress={() => setDeadBodyFound(null)}
+              >
+                <Text style={[styles.leaveBtnText, { textAlign: 'center' }]}>
+                  Dismiss (Do Not Report)
+                </Text>
               </TouchableOpacity>
             </View>
           ) : null}

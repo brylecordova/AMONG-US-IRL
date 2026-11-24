@@ -217,7 +217,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
           <View style={styles.topHero}>
             <AnimatedCrewmate color={selectedColor} size={64} animate />
             <View style={{ flex: 1 }}>
-              <Text style={styles.kicker}>SKELD IRL • MOBILE SCANNER CLIENT</Text>
+              <Text style={styles.kicker}>AMONG-US IRL • MOBILE SCANNER CLIENT</Text>
               <Text style={styles.title}>Board The Skeld</Text>
             </View>
           </View>

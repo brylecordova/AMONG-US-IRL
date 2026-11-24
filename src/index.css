@@ -45,7 +45,7 @@
 @media print {
   @page {
     size: letter portrait;
-    margin: 0.4in;
+    margin: 0.35in;
   }
 
   body {
@@ -57,14 +57,48 @@
     display: none !important;
   }
 
+  .print-root {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    min-height: 0 !important;
+  }
+
   .print-only-sheet {
     display: block !important;
     background: #ffffff !important;
     color: #0f172a !important;
   }
 
+  .print-block-container {
+    display: block !important;
+  }
+
+  .print-page-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-page-break:not(:last-child) {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .print-page-crew {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 0.22in !important;
+  }
+
+  .print-page-quad {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.22in !important;
+  }
+
   .print-card {
     break-inside: avoid;
     page-break-inside: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
