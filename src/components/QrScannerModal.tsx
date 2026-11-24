@@ -9,6 +9,7 @@ interface QrScannerModalProps {
   title: string;
   subtitle: string;
   accentColor?: 'emerald' | 'red' | 'cyan';
+  hideManualCodes?: boolean;
   onDetected: (parsed: ParsedQrAction) => void;
   onClose: () => void;
 }
@@ -17,6 +18,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   title,
   subtitle,
   accentColor = 'cyan',
+  hideManualCodes = false,
   onDetected,
   onClose,
 }) => {
@@ -48,14 +50,18 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
       if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
         setCameraError(
-          'Live video requires HTTPS on LAN IPs. Use "Take Photo of QR" or enter the manual code below.',
+          hideManualCodes
+            ? 'Live video requires HTTPS on LAN IPs. Use "Take Photo of QR" below.'
+            : 'Live video requires HTTPS on LAN IPs. Use "Take Photo of QR" or enter the manual code below.',
         );
         return;
       }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setCameraError(
-          'Live camera API unavailable in this browser. Use "Take Photo of QR" or enter the manual code below.',
+          hideManualCodes
+            ? 'Live camera API unavailable in this browser. Use "Take Photo of QR" below.'
+            : 'Live camera API unavailable in this browser. Use "Take Photo of QR" or enter the manual code below.',
         );
         return;
       }
@@ -349,32 +355,37 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             />
           </label>
 
-          {/* Manual Fallback Code Input */}
-          <form onSubmit={handleManualSubmit} className="space-y-2">
-            <label className="flex items-center gap-2 text-xs font-medium text-slate-300">
-              <Keyboard className="w-4 h-4 text-slate-400" />
-              <span>Manual Code Fallback (Task / Suit Color / EMRG)</span>
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={manualCode}
-                onChange={(e) => {
-                  setManualCode(e.target.value.toUpperCase());
-                  setManualError(null);
-                }}
-                placeholder="e.g. WIR1, RED, EMRG"
-                className="flex-1 min-w-0 min-h-[44px] px-3.5 rounded-xl bg-slate-950 border border-white/15 font-mono text-sm uppercase text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
-              />
-              <button
-                type="submit"
-                className="min-h-[44px] px-5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm whitespace-nowrap shrink-0"
-              >
-                Submit
-              </button>
-            </div>
-            {manualError && <p className="text-xs text-red-400">{manualError}</p>}
-          </form>
+          {/* Manual Fallback Code Input (Hidden when Host enables Hide Manual Codes) */}
+          {!hideManualCodes && (
+            <form onSubmit={handleManualSubmit} className="space-y-2">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-300">
+                <Keyboard className="w-4 h-4 text-slate-400" />
+                <span>Manual Code Fallback (Task / Suit Color / EMRG)</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualCode}
+                  onChange={(e) => {
+                    setManualCode(e.target.value.toUpperCase());
+                    setManualError(null);
+                  }}
+                  placeholder="e.g. WIR1, RED, EMRG"
+                  className="flex-1 min-w-0 min-h-[44px] px-3.5 rounded-xl bg-slate-950 border border-white/15 font-mono text-sm uppercase text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+                />
+                <button
+                  type="submit"
+                  className="min-h-[44px] px-5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm whitespace-nowrap shrink-0"
+                >
+                  Submit
+                </button>
+              </div>
+              {manualError && <p className="text-xs text-red-400">{manualError}</p>}
+            </form>
+          )}
+          {hideManualCodes && manualError && (
+            <p className="text-xs text-red-400">{manualError}</p>
+          )}
         </div>
       </motion.div>
     </motion.div>

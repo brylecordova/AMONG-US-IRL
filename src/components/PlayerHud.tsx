@@ -20,6 +20,7 @@ import {
   getColorDef,
   getTaskDef,
   ParsedQrAction,
+  PLAYER_COLORS,
   PlayerColorId,
   PublicAlignment,
   SabotageKind,
@@ -76,7 +77,9 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     state.self.sabotageCooldownRemainingSec ?? 0,
   );
   const [sabotageBusy, setSabotageBusy] = useState(false);
+  const [colorBusy, setColorBusy] = useState(false);
   const prevPhaseRef = useRef(state.phase);
+  const roleSplashShownRef = useRef(false);
 
   // Sync cooldowns from server snapshot and tick every second smoothly
   useEffect(() => {
@@ -133,30 +136,36 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       activeTask.id !== 'fix-wiring'
     ) {
       setActiveTask(null);
-      setToastMsg('Power Blackout! Scan Fix Wiring (WIR1) to restore power first.');
+      const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
+      setToastMsg(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
     }
-  }, [state.activeSabotage?.kind, activeTask]);
+  }, [state.activeSabotage?.kind, activeTask, state.settings.hideManualCodes]);
 
-  // Trigger Role Reveal Splash once at the start of a mission
+  // Trigger Role Reveal Splash ONLY ONCE at mission start (never again after meetings!)
   useEffect(() => {
-    if (missionStartedTrigger > 0 && state.phase === 'PLAYING') {
-      setShowRoleSplash(true);
+    if (state.phase === 'LOBBY') {
+      roleSplashShownRef.current = false;
+      setShowRoleSplash(false);
+    } else if (state.phase === 'ENDED') {
+      setShowRoleSplash(false);
     }
-  }, [missionStartedTrigger, state.phase]);
 
-  useEffect(() => {
-    if (prevPhaseRef.current === 'LOBBY' && state.phase === 'PLAYING') {
-      setShowRoleSplash(true);
-    }
     if (state.phase !== 'PLAYING') {
       setShowTerminal(false);
       setTerminalUnlocked(false);
     }
-    if (state.phase === 'LOBBY' || state.phase === 'ENDED') {
-      setShowRoleSplash(false);
+
+    if (
+      !roleSplashShownRef.current &&
+      state.phase === 'PLAYING' &&
+      (prevPhaseRef.current === 'LOBBY' || missionStartedTrigger > 0)
+    ) {
+      roleSplashShownRef.current = true;
+      setShowRoleSplash(true);
     }
+
     prevPhaseRef.current = state.phase;
-  }, [state.phase]);
+  }, [missionStartedTrigger, state.phase]);
 
   // Play victory sound when game ends
   useEffect(() => {
@@ -197,12 +206,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
     if (parsed.kind === 'TASK') {
       if (state.activeSabotage?.kind === 'BLACKOUT') {
+        const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
         if (parsed.task.id !== 'fix-wiring') {
-          showToast('Power Blackout active! Scan Fix Wiring (WIR1) to restore power first.');
+          showToast(`Power Blackout active! Scan Fix Wiring${codeHint} to restore power first.`);
           return;
         }
         if (!state.self.alive) {
-          showToast('Power Blackout active! Only alive players can restore Fix Wiring (WIR1).');
+          showToast(`Power Blackout active! Only alive players can restore Fix Wiring${codeHint}.`);
           return;
         }
       }
@@ -287,7 +297,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       onUpdateState(data.state);
       showToast(
         kind === 'BLACKOUT'
-          ? 'Power Blackout triggered! Tasks locked until Fix Wiring (WIR1) is repaired.'
+          ? `Power Blackout triggered! Tasks locked until Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} is repaired.`
           : 'Signal Jam triggered! Emergency Meetings disabled for 60s.',
       );
     } catch (err) {
@@ -340,6 +350,29 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       onUpdateState(data.state);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Check-in failed.');
+    }
+  };
+
+  const handleSwitchLobbyColor = async (colorId: PlayerColorId) => {
+    if (colorBusy || colorId === state.self.color) return;
+    soundEngine.playClick();
+    setColorBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/player/color`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ color: colorId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to switch suit color.');
+    } finally {
+      setColorBusy(false);
     }
   };
 
@@ -476,6 +509,39 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
               <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-2.5">
                 <div className="text-xs font-medium text-slate-400">
+                  Switch Suit Color (Updates Crew Manifest Live)
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {PLAYER_COLORS.map((c) => {
+                    const claimedBy = state.players.find((p) => p.color === c.id);
+                    const isMine = c.id === state.self.color;
+                    const isTakenOther = Boolean(claimedBy && !isMine);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        disabled={isTakenOther || colorBusy}
+                        onClick={() => handleSwitchLobbyColor(c.id)}
+                        className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
+                          isMine
+                            ? 'bg-cyan-500/20 border-cyan-400'
+                            : isTakenOther
+                              ? 'bg-slate-950/40 border-white/5 opacity-35 cursor-not-allowed'
+                              : 'bg-slate-950/60 border-white/10 hover:border-white/30'
+                        }`}
+                      >
+                        <CrewmateAvatar color={c.id} size={28} />
+                        <span className="text-[11px] font-medium text-slate-200 truncate w-full text-center">
+                          {isMine ? 'You' : isTakenOther ? claimedBy?.name : c.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-2.5">
+                <div className="text-xs font-medium text-slate-400">
                   Crewmates in Lobby ({state.players.length}/12)
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -542,25 +608,38 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     initial={{ opacity: 0, scale: 0.96 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.96 }}
-                    className="bg-amber-500/15 border-2 border-amber-400 rounded-2xl p-4 flex items-start gap-3 animate-pulse"
+                    className="bg-amber-500/15 border-2 border-amber-400 rounded-2xl p-4 space-y-3"
                   >
-                    {state.activeSabotage.kind === 'BLACKOUT' ? (
-                      <ZapOff className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
-                    ) : (
-                      <Radio className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="font-display text-2xl font-bold text-amber-200 leading-none">
-                        {state.activeSabotage.kind === 'BLACKOUT'
-                          ? 'POWER BLACKOUT!'
-                          : 'COMMS SIGNAL JAM!'}
+                    <div className="flex items-start gap-3">
+                      {state.activeSabotage.kind === 'BLACKOUT' ? (
+                        <ZapOff className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
+                      ) : (
+                        <Radio className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-display text-2xl font-bold text-amber-200 leading-none">
+                          {state.activeSabotage.kind === 'BLACKOUT'
+                            ? 'POWER BLACKOUT!'
+                            : 'COMMS SIGNAL JAM!'}
+                        </div>
+                        <p className="text-xs text-amber-100/90 mt-1.5 leading-relaxed">
+                          {state.activeSabotage.kind === 'BLACKOUT'
+                            ? `All regular tasks are disabled. Anyone alive — even if you already completed it or don't have it assigned — can scan Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} in Electrical to restore power!`
+                            : `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
+                        </p>
                       </div>
-                      <p className="text-xs text-amber-100/90 mt-1.5 leading-relaxed">
-                        {state.activeSabotage.kind === 'BLACKOUT'
-                          ? 'All regular tasks are disabled. Any alive player must scan Fix Wiring (WIR1) in Electrical and complete it to restore ship power!'
-                          : `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
-                      </p>
                     </div>
+
+                    {state.activeSabotage.kind === 'BLACKOUT' && state.self.alive && (
+                      <button
+                        type="button"
+                        onClick={() => setScannerMode('AUTO')}
+                        className="w-full min-h-[44px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <QrCode className="w-4 h-4" />
+                        <span>Scan Fix Wiring QR to Restore Power</span>
+                      </button>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -578,8 +657,34 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 </div>
 
                 <div className="space-y-2">
+                  {state.activeSabotage?.kind === 'BLACKOUT' &&
+                    state.self.alive &&
+                    !state.self.assignedTasks.some((t) => t.taskId === 'fix-wiring') && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-3 rounded-xl border-2 border-amber-400/70 bg-amber-500/15 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-amber-200">
+                            Emergency Repair: Fix Wiring
+                          </div>
+                          <div className="text-xs text-amber-100/80 mt-0.5">
+                            Electrical · Available to anyone alive during Blackout
+                          </div>
+                        </div>
+                        <span className="font-mono text-xs font-bold text-amber-300 shrink-0">
+                          REPAIR POWER
+                        </span>
+                      </motion.div>
+                    )}
+
                   {state.self.assignedTasks.map((item, idx) => {
                     const def = getTaskDef(item.taskId);
+                    const isBlackoutWiring =
+                      state.activeSabotage?.kind === 'BLACKOUT' &&
+                      state.self.alive &&
+                      item.taskId === 'fix-wiring';
                     return (
                       <motion.div
                         key={item.taskId}
@@ -587,14 +692,24 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: idx * 0.04 }}
                         className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
-                          item.completed
-                            ? 'bg-emerald-950/20 border-emerald-500/30 opacity-70'
-                            : 'bg-slate-950/60 border-white/10'
+                          isBlackoutWiring
+                            ? 'bg-amber-500/15 border-amber-400/70'
+                            : item.completed
+                              ? 'bg-emerald-950/20 border-emerald-500/30 opacity-70'
+                              : 'bg-slate-950/60 border-white/10'
                         }`}
                       >
                         <div className="min-w-0">
                           <div className="font-semibold text-sm text-white flex items-center gap-2">
-                            <span className={item.completed ? 'line-through text-emerald-300' : ''}>
+                            <span
+                              className={
+                                isBlackoutWiring
+                                  ? 'text-amber-200'
+                                  : item.completed
+                                    ? 'line-through text-emerald-300'
+                                    : ''
+                              }
+                            >
                               {def.name}
                             </span>
                           </div>
@@ -611,7 +726,11 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                           </div>
                         </div>
 
-                        {item.completed ? (
+                        {isBlackoutWiring ? (
+                          <span className="font-mono text-xs font-bold text-amber-300 shrink-0">
+                            {item.completed ? 'RE-SCAN TO RESTORE' : 'REPAIR POWER'}
+                          </span>
+                        ) : item.completed ? (
                           <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
                         ) : (
                           <span className="font-mono text-xs text-slate-400 shrink-0">
@@ -655,9 +774,25 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="mt-2 py-2 px-3 rounded-xl bg-slate-950/80 text-amber-300 font-semibold text-sm"
+                  className="mt-2 py-3 px-4 rounded-xl bg-slate-950/85 border border-white/10 space-y-2"
                 >
-                  {state.meeting.verdictMessage}
+                  {state.meeting.ejectedPlayer && (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <CrewmateAvatar
+                        color={state.meeting.ejectedPlayer.color}
+                        alive={false}
+                        size={48}
+                      />
+                      {state.meeting.ejectedPlayer.playerId === state.self.playerId && (
+                        <div className="text-xs font-mono font-bold text-red-400 uppercase tracking-wider">
+                          YOU WERE VOTED OUT &amp; KILLED — ENTERING GHOST MODE
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="text-amber-300 font-semibold text-sm">
+                    {state.meeting.verdictMessage}
+                  </div>
                 </motion.div>
               ) : state.meeting.stage === 'GATHERING' ? (
                 <div className="font-mono text-xs text-amber-300 tabular-nums pt-1">
@@ -1150,8 +1285,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         {scannerMode && (
           <QrScannerModal
             title="Skeld QR Scanner"
-            subtitle="Scan any Task QR, Player back badge, or Cafeteria EMRG button."
+            subtitle={
+              state.settings.hideManualCodes
+                ? 'Scan a physical Task QR, Player back badge, or Cafeteria button.'
+                : 'Scan any Task QR, Player back badge, or Cafeteria EMRG button.'
+            }
             accentColor="emerald"
+            hideManualCodes={Boolean(state.settings.hideManualCodes)}
             onDetected={handleQrDetected}
             onClose={() => setScannerMode(null)}
           />
@@ -1163,6 +1303,9 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         {activeTask && (
           <SkeldTaskModal
             task={activeTask}
+            isBlackoutRepair={
+              activeTask.id === 'fix-wiring' && state.activeSabotage?.kind === 'BLACKOUT'
+            }
             onComplete={handleTaskComplete}
             onClose={() => setActiveTask(null)}
           />

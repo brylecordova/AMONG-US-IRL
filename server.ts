@@ -7,7 +7,6 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
-import { createServer as createViteServer } from 'vite';
 import {
   getActiveSessionCodes,
   getDbMode,
@@ -18,6 +17,7 @@ import {
 import {
   advanceSessionTimers,
   castMeetingVote,
+  changePlayerColorInLobby,
   completePlayerTask,
   createGameSession,
   forceStartMeetingDiscussion,
@@ -94,12 +94,21 @@ function resolveRequestOrigin(req: express.Request, protocol: 'http' | 'https'):
 interface WsClientMeta {
   ws: WebSocket;
   sessionCode: string;
-  role: 'HOST' | 'PLAYER';
+  role: 'HOST' | 'PLAYER' | 'PUBLIC';
   token: string;
   playerId?: string;
 }
 
 const clientsBySession = new Map<string, Set<WsClientMeta>>();
+
+function buildPublicSummary(session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
+  return {
+    sessionCode: session.sessionCode,
+    phase: session.phase,
+    takenColors: session.players.map((p) => p.color),
+    playerCount: session.players.length,
+  };
+}
 
 async function broadcastSessionState(sessionCode: string, event?: { type: string; payload?: unknown; targetPlayerId?: string }) {
   const session = await getSession(sessionCode);
@@ -108,9 +117,20 @@ async function broadcastSessionState(sessionCode: string, event?: { type: string
   if (!group) return;
 
   const lanUrls = getLanUrls(PORT);
+  const publicSummary = buildPublicSummary(session);
 
   for (const client of group) {
     if (client.ws.readyState !== WebSocket.OPEN) continue;
+
+    if (client.role === 'PUBLIC') {
+      client.ws.send(
+        JSON.stringify({
+          type: 'state:public',
+          payload: publicSummary,
+        }),
+      );
+      continue;
+    }
 
     if (event) {
       if (!event.targetPlayerId || event.targetPlayerId === client.playerId) {
@@ -260,6 +280,22 @@ async function main() {
       });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to rejoin mission.' });
+    }
+  });
+
+  // Switch player suit color in real time while in LOBBY
+  app.post('/api/sessions/:code/player/color', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) return res.status(401).json({ error: 'Unauthorized.' });
+
+      const { color } = req.body as { color?: unknown };
+      const session = await changePlayerColorInLobby(code, playerToken, color);
+      await broadcastSessionState(code);
+      res.json({ state: projectForPlayer(session, playerToken) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to switch suit color.' });
     }
   });
 
@@ -518,6 +554,7 @@ async function main() {
 
   // Vite dev middleware or production dist
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -550,15 +587,33 @@ async function main() {
 
         if (msg.type === 'subscribe') {
           const code = sanitizeSessionCode(msg.sessionCode);
-          if (!code || typeof msg.token !== 'string') return;
+          if (!code) return;
           const session = await getSession(code);
           if (!session) {
             ws.send(JSON.stringify({ type: 'error', error: 'Session not found.' }));
             return;
           }
 
-          const role = msg.role === 'HOST' ? 'HOST' : 'PLAYER';
+          const role =
+            msg.role === 'HOST' ? 'HOST' : msg.role === 'PUBLIC' ? 'PUBLIC' : 'PLAYER';
           let playerId: string | undefined;
+
+          if (role === 'PUBLIC') {
+            clientMeta = { ws, sessionCode: code, role: 'PUBLIC', token: '' };
+            if (!clientsBySession.has(code)) {
+              clientsBySession.set(code, new Set());
+            }
+            clientsBySession.get(code)!.add(clientMeta);
+            ws.send(
+              JSON.stringify({
+                type: 'state:public',
+                payload: buildPublicSummary(session),
+              }),
+            );
+            return;
+          }
+
+          if (typeof msg.token !== 'string') return;
 
           if (role === 'HOST') {
             if (msg.token !== session.hostToken) {

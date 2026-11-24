@@ -15,6 +15,7 @@ import {
   getColorDef,
   getTaskDef,
   ParsedQrAction,
+  PLAYER_COLORS,
   PlayerColorId,
   PublicAlignment,
   SabotageKind,
@@ -63,6 +64,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   const [forensicResult, setForensicResult] = useState<ForensicResult | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sabotageBusy, setSabotageBusy] = useState(false);
+  const [colorBusy, setColorBusy] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const [localKillRemaining, setLocalKillRemaining] = useState(state.self.killCooldownRemainingSec);
   const [localScanRemaining, setLocalScanRemaining] = useState(state.self.scanCooldownRemainingSec);
@@ -71,6 +73,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   );
 
   const prevPhaseRef = useRef(state.phase);
+  const roleSplashShownRef = useRef(false);
   const progressAnim = useRef(new Animated.Value(state.taskProgress.percentage)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -145,29 +148,35 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       activeTask.id !== 'fix-wiring'
     ) {
       setActiveTask(null);
-      showToast('Power Blackout! Scan Fix Wiring (WIR1) to restore power first.');
+      const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
+      showToast(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
     }
-  }, [state.activeSabotage?.kind, activeTask]);
+  }, [state.activeSabotage?.kind, activeTask, state.settings.hideManualCodes]);
 
   useEffect(() => {
-    if (missionStartedTrigger > 0 && state.phase === 'PLAYING') {
-      setShowRoleSplash(true);
+    if (state.phase === 'LOBBY') {
+      roleSplashShownRef.current = false;
+      setShowRoleSplash(false);
+    } else if (state.phase === 'ENDED') {
+      setShowRoleSplash(false);
     }
-  }, [missionStartedTrigger, state.phase]);
 
-  useEffect(() => {
-    if (prevPhaseRef.current === 'LOBBY' && state.phase === 'PLAYING') {
-      setShowRoleSplash(true);
-    }
     if (state.phase !== 'PLAYING') {
       setShowTerminal(false);
       setTerminalUnlocked(false);
     }
-    if (state.phase === 'LOBBY' || state.phase === 'ENDED') {
-      setShowRoleSplash(false);
+
+    if (
+      !roleSplashShownRef.current &&
+      state.phase === 'PLAYING' &&
+      (prevPhaseRef.current === 'LOBBY' || missionStartedTrigger > 0)
+    ) {
+      roleSplashShownRef.current = true;
+      setShowRoleSplash(true);
     }
+
     prevPhaseRef.current = state.phase;
-  }, [state.phase]);
+  }, [missionStartedTrigger, state.phase]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -194,12 +203,13 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
     if (parsed.kind === 'TASK') {
       if (state.activeSabotage?.kind === 'BLACKOUT') {
+        const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
         if (parsed.task.id !== 'fix-wiring') {
-          showToast('Power Blackout! Scan Fix Wiring (WIR1) to restore power first.');
+          showToast(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
           return;
         }
         if (!state.self.alive) {
-          showToast('Only alive crewmates can repair Fix Wiring (WIR1) during a Blackout.');
+          showToast(`Only alive crewmates can repair Fix Wiring${codeHint} during a Blackout.`);
           return;
         }
       }
@@ -330,6 +340,28 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
     }
   };
 
+  const handleSwitchLobbyColor = async (colorId: PlayerColorId) => {
+    if (colorBusy || colorId === state.self.color) return;
+    setColorBusy(true);
+    try {
+      const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/player/color`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ color: colorId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      onUpdateState(data.state);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to switch suit color.');
+    } finally {
+      setColorBusy(false);
+    }
+  };
+
   const handleVote = async (target: string) => {
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/vote`, {
@@ -406,7 +438,36 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
               <Text style={styles.rejoinCode}>{state.self.rejoinCode}</Text>
             </View>
 
-            <Text style={styles.sectionHeading}>Roster ({state.players.length})</Text>
+            <Text style={[styles.sectionHeading, { marginTop: 14 }]}>Switch Suit Color (Live Sync)</Text>
+            <View style={styles.colorSwitchGrid}>
+              {PLAYER_COLORS.map((c) => {
+                const claimedBy = state.players.find((p) => p.color === c.id);
+                const isMine = c.id === state.self.color;
+                const isTakenOther = Boolean(claimedBy && !isMine);
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    disabled={isTakenOther || colorBusy}
+                    onPress={() => handleSwitchLobbyColor(c.id)}
+                    style={[
+                      styles.colorSwitchCell,
+                      {
+                        borderColor: isMine ? '#38BDF8' : '#1E293B',
+                        backgroundColor: isMine ? '#1E293B' : '#0B0F17',
+                        opacity: isTakenOther ? 0.32 : 1,
+                      },
+                    ]}
+                  >
+                    <View style={[styles.colorDot, { backgroundColor: c.hex }]} />
+                    <Text style={styles.colorSwitchText} numberOfLines={1}>
+                      {isMine ? 'You' : isTakenOther ? claimedBy?.name : c.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={[styles.sectionHeading, { marginTop: 14 }]}>Roster ({state.players.length})</Text>
             <View style={styles.rosterGrid}>
               {state.players.map((p) => (
                 <View key={p.playerId} style={styles.rosterCell}>
@@ -427,8 +488,16 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
               <Animated.View style={[styles.sabotageBanner, { borderColor: '#F59E0B', transform: [{ scale: pulseAnim }] }]}>
                 <Text style={[styles.sabotageTitle, { color: '#FBBF24' }]}>POWER BLACKOUT ACTIVE</Text>
                 <Text style={styles.sabotageSub}>
-                  All ship tasks locked. Scan Fix Wiring (WIR1) to restore power!
+                  All regular tasks locked. Anyone alive — even if already finished or not on your list — can scan Fix Wiring{state.settings.hideManualCodes ? '' : ' (WIR1)'} to restore power!
                 </Text>
+                {state.self.alive ? (
+                  <TouchableOpacity
+                    style={[styles.primaryActionMini, { backgroundColor: '#F59E0B', marginTop: 10 }]}
+                    onPress={() => setShowScanner(true)}
+                  >
+                    <Text style={styles.primaryActionMiniText}>Scan Fix Wiring QR</Text>
+                  </TouchableOpacity>
+                ) : null}
               </Animated.View>
             ) : null}
 
@@ -476,31 +545,69 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
             <View style={styles.panel}>
               <Text style={styles.sectionHeading}>Assigned Skeld Tasks</Text>
               <View style={{ gap: 8, marginTop: 10 }}>
+                {state.activeSabotage?.kind === 'BLACKOUT' &&
+                state.self.alive &&
+                !state.self.assignedTasks.some((t) => t.taskId === 'fix-wiring') ? (
+                  <View
+                    style={[
+                      styles.taskRow,
+                      { borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.12)' },
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.taskName, { color: '#FDE68A' }]}>
+                        Emergency Repair: Fix Wiring
+                      </Text>
+                      <Text style={styles.taskRoom}>
+                        Electrical • Anyone alive can repair power
+                      </Text>
+                    </View>
+                    <Text style={{ color: '#FBBF24', fontWeight: '900', fontSize: 12 }}>
+                      REPAIR
+                    </Text>
+                  </View>
+                ) : null}
+
                 {state.self.assignedTasks.map((t) => {
                   const def = getTaskDef(t.taskId);
+                  const isBlackoutWiring =
+                    state.activeSabotage?.kind === 'BLACKOUT' &&
+                    state.self.alive &&
+                    t.taskId === 'fix-wiring';
                   return (
                     <View
                       key={t.taskId}
                       style={[
                         styles.taskRow,
-                        { opacity: t.completed ? 0.5 : 1 },
+                        isBlackoutWiring
+                          ? { borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.12)', opacity: 1 }
+                          : { opacity: t.completed ? 0.5 : 1 },
                       ]}
                     >
                       <View style={{ flex: 1 }}>
                         <Text
                           style={[
                             styles.taskName,
-                            t.completed && { textDecorationLine: 'line-through' },
+                            isBlackoutWiring
+                              ? { color: '#FDE68A' }
+                              : t.completed && { textDecorationLine: 'line-through' },
                           ]}
                         >
                           {def.name}
                         </Text>
                         <Text style={styles.taskRoom}>
-                          {def.room} • Code {def.shortCode}
+                          {def.room}
+                          {state.settings.hideManualCodes ? '' : ` • Code ${def.shortCode}`}
                         </Text>
                       </View>
-                      <Text style={{ color: t.completed ? '#4ADE80' : '#64748B', fontWeight: '900', fontSize: 12 }}>
-                        {t.completed ? 'DONE' : 'SCAN'}
+                      <Text
+                        style={{
+                          color: isBlackoutWiring ? '#FBBF24' : t.completed ? '#4ADE80' : '#64748B',
+                          fontWeight: '900',
+                          fontSize: 12,
+                        }}
+                      >
+                        {isBlackoutWiring ? (t.completed ? 'RE-SCAN' : 'REPAIR') : t.completed ? 'DONE' : 'SCAN'}
                       </Text>
                     </View>
                   );
@@ -584,6 +691,20 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
             {state.meeting.stage === 'VERDICT' ? (
               <View style={styles.verdictBox}>
+                {state.meeting.ejectedPlayer ? (
+                  <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                    <AnimatedCrewmate
+                      color={state.meeting.ejectedPlayer.color}
+                      alive={false}
+                      size={56}
+                    />
+                    {state.meeting.ejectedPlayer.playerId === state.self.playerId ? (
+                      <Text style={{ color: '#EF4444', fontWeight: '900', fontSize: 12, marginTop: 6 }}>
+                        YOU WERE VOTED OUT & KILLED
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 <Text style={styles.verdictText}>
                   {state.meeting.verdictMessage || 'Tallying votes...'}
                 </Text>
@@ -790,6 +911,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       {/* NATIVE CAMERA QR SCANNER */}
       <NativeQrScannerModal
         visible={showScanner}
+        hideManualCodes={Boolean(state.settings.hideManualCodes)}
         onDetected={handleQrDetected}
         onClose={() => setShowScanner(false)}
       />
@@ -797,6 +919,9 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       {/* 16 SKELD MINI-GAMES */}
       <TaskMiniGamesModal
         task={activeTask}
+        isBlackoutRepair={
+          Boolean(activeTask && activeTask.id === 'fix-wiring' && state.activeSabotage?.kind === 'BLACKOUT')
+        }
         onComplete={handleTaskCompleted}
         onClose={() => setActiveTask(null)}
       />
@@ -979,6 +1104,33 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: '#CBD5E1',
   },
+  colorSwitchGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  colorSwitchCell: {
+    width: '31.4%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1.5,
+  },
+  colorDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  colorSwitchText: {
+    color: '#F8FAFC',
+    fontSize: 11,
+    fontWeight: '800',
+    flex: 1,
+  },
   rosterGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1015,6 +1167,18 @@ const styles = StyleSheet.create({
     color: '#E2E8F0',
     fontSize: 12,
     marginTop: 4,
+  },
+  primaryActionMini: {
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+  },
+  primaryActionMiniText: {
+    color: '#060A12',
+    fontSize: 13,
+    fontWeight: '900',
   },
   rowBetween: {
     flexDirection: 'row',

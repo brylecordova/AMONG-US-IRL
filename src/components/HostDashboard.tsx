@@ -341,8 +341,8 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                       </div>
                       <div className="text-xs text-amber-100/80 mt-0.5">
                         {state.activeSabotage.kind === 'BLACKOUT'
-                          ? 'All tasks are locked until an alive player scans and completes Fix Wiring (WIR1).'
-                          : 'Emergency Meeting button (EMRG) is disabled for 60 seconds.'}
+                          ? `All tasks are locked until an alive player scans and completes Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} — even if already completed or unassigned.`
+                          : `Emergency Meeting button${state.settings.hideManualCodes ? '' : ' (EMRG)'} is disabled for 60 seconds.`}
                       </div>
                     </div>
                   </motion.div>
@@ -560,9 +560,11 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                           <span className="font-mono text-xs font-bold text-slate-500">
                             SESSION {state.sessionCode}
                           </span>
-                          <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-100 border border-slate-300">
-                            CODE: {color.code}
-                          </span>
+                          {!state.settings.hideManualCodes && (
+                            <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-100 border border-slate-300">
+                              CODE: {color.code}
+                            </span>
+                          )}
                         </div>
                         <QrCodeImg
                           value={buildPlayerQrPayload(state.sessionCode, color.id)}
@@ -612,9 +614,11 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                         <div className="font-display text-xl font-bold leading-tight">
                           {task.name}
                         </div>
-                        <div className="font-mono text-xs font-bold text-slate-600 mt-0.5">
-                          MANUAL CODE: {task.shortCode}
-                        </div>
+                        {!state.settings.hideManualCodes && (
+                          <div className="font-mono text-xs font-bold text-slate-600 mt-0.5">
+                            MANUAL CODE: {task.shortCode}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -638,7 +642,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                     alt="Emergency Meeting QR"
                   />
                   <div className="font-mono text-xs font-bold text-slate-700">
-                    CAFETERIA · MANUAL CODE: EMRG
+                    CAFETERIA{state.settings.hideManualCodes ? '' : ' · MANUAL CODE: EMRG'}
                   </div>
                 </div>
               </section>
@@ -829,6 +833,24 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                 checked={state.settings.confirmEjects}
                 onChange={(e) => updateSettings({ confirmEjects: e.target.checked })}
                 className="w-5 h-5 accent-cyan-400"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+              <div>
+                <div className="text-sm font-semibold text-white">
+                  Hide Manual Codes (Anti-Remote Kill)
+                </div>
+                <div className="text-xs text-slate-400">
+                  Removes manual short codes from printed sheets and disables typing codes in the scanner so Impostors must scan physical QR badges up close.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                disabled={state.phase !== 'LOBBY'}
+                checked={Boolean(state.settings.hideManualCodes)}
+                onChange={(e) => updateSettings({ hideManualCodes: e.target.checked })}
+                className="w-5 h-5 accent-cyan-400 shrink-0 ml-4"
               />
             </label>
           </div>

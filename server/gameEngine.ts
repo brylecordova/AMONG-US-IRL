@@ -79,6 +79,10 @@ function sanitizeSettings(raw: Partial<GameSettings> | undefined, existing: Game
     discussionSec: clamp(raw?.discussionSec, 10, 120, existing.discussionSec),
     votingSec: clamp(raw?.votingSec, 15, 180, existing.votingSec),
     confirmEjects: typeof raw?.confirmEjects === 'boolean' ? raw.confirmEjects : existing.confirmEjects,
+    hideManualCodes:
+      typeof raw?.hideManualCodes === 'boolean'
+        ? raw.hideManualCodes
+        : (existing.hideManualCodes ?? false),
   };
 }
 
@@ -361,6 +365,35 @@ export async function rejoinGameSession(
   return { session, player };
 }
 
+export async function changePlayerColorInLobby(
+  sessionCode: string,
+  playerToken: string,
+  rawColor: unknown,
+): Promise<StoredSession> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'LOBBY') {
+    throw new Error('Suit colors can only be changed while in the lobby.');
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+
+  if (typeof rawColor !== 'string' || !PLAYER_COLORS.some((c) => c.id === rawColor)) {
+    throw new Error('Invalid crewmate suit color.');
+  }
+  const nextColor = rawColor as PlayerColorId;
+  if (player.color === nextColor) return session;
+
+  if (session.players.some((p) => p.playerId !== player.playerId && p.color === nextColor)) {
+    throw new Error(`The ${getColorDef(nextColor).label} suit is already claimed.`);
+  }
+
+  player.color = nextColor;
+  await saveSession(session);
+  return session;
+}
+
 export async function kickPlayerFromLobby(
   sessionCode: string,
   hostToken: string,
@@ -603,14 +636,15 @@ export async function completePlayerTask(
 
   let powerRestored = false;
   if (session.activeSabotage?.kind === 'BLACKOUT') {
+    const codeHint = session.settings.hideManualCodes ? '' : ' (WIR1)';
     if (taskId !== 'fix-wiring') {
       throw new Error(
-        'Power Blackout active! Tasks are locked until an alive player scans Fix Wiring (WIR1) and restores power.',
+        `Power Blackout active! Tasks are locked until an alive player scans Fix Wiring${codeHint} and restores power.`,
       );
     }
     if (!player.alive) {
       throw new Error(
-        'Power Blackout active! Ghosts cannot restore ship power — an alive player must complete Fix Wiring (WIR1).',
+        `Power Blackout active! Ghosts cannot restore ship power — an alive player must complete Fix Wiring${codeHint}.`,
       );
     }
     session.activeSabotage = null;

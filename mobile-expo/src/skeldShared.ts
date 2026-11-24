@@ -235,6 +235,7 @@ export interface GameSettings {
   discussionSec: number;
   votingSec: number;
   confirmEjects: boolean;
+  hideManualCodes?: boolean;
 }
 
 export interface AssignedTask {

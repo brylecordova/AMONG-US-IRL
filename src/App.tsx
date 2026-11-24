@@ -53,34 +53,82 @@ export default function App() {
     }
   }, []);
 
-  // Poll taken colors in Join form whenever joinCode reaches 6 chars
+  const selectedColorRef = useRef<PlayerColorId>(selectedColor);
   useEffect(() => {
-    if (screen !== 'JOIN_FORM' || joinCode.trim().length < 4) {
+    selectedColorRef.current = selectedColor;
+  }, [selectedColor]);
+
+  // Real-time taken colors in Join form whenever joinCode is entered
+  useEffect(() => {
+    const cleanCode = joinCode.trim().toUpperCase();
+    if (screen !== 'JOIN_FORM' || cleanCode.length < 4) {
       setTakenColors([]);
       return;
     }
+
     let active = true;
+    let publicWs: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const applyTaken = (colors: PlayerColorId[]) => {
+      if (!active) return;
+      setTakenColors(colors);
+      if (colors.includes(selectedColorRef.current)) {
+        const firstFree = PLAYER_COLORS.find((c) => !colors.includes(c.id));
+        if (firstFree) setSelectedColor(firstFree.id);
+      }
+    };
+
     const fetchPublic = async () => {
       try {
-        const res = await fetch(`/api/sessions/${joinCode.trim().toUpperCase()}/public`);
+        const res = await fetch(`/api/sessions/${cleanCode}/public`);
         if (!res.ok) return;
         const data = await res.json();
-        if (active && Array.isArray(data.takenColors)) {
-          setTakenColors(data.takenColors);
-          const firstFree = PLAYER_COLORS.find((c) => !data.takenColors.includes(c.id));
-          if (firstFree && data.takenColors.includes(selectedColor)) {
-            setSelectedColor(firstFree.id);
-          }
+        if (Array.isArray(data.takenColors)) {
+          applyTaken(data.takenColors);
         }
       } catch {
         // Ignore transient lookup errors while typing
       }
     };
+
+    const openPublicWs = () => {
+      if (!active) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      publicWs = ws;
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'subscribe', sessionCode: cleanCode, role: 'PUBLIC' }));
+      };
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data) as {
+            type?: string;
+            payload?: { takenColors?: PlayerColorId[] };
+          };
+          if (msg.type === 'state:public' && Array.isArray(msg.payload?.takenColors)) {
+            applyTaken(msg.payload.takenColors);
+          }
+        } catch {
+          // Ignore malformed frame
+        }
+      };
+      ws.onclose = () => {
+        if (active) {
+          reconnectTimer = setTimeout(openPublicWs, 2000);
+        }
+      };
+    };
+
     fetchPublic();
+    openPublicWs();
+
     return () => {
       active = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (publicWs) publicWs.close();
     };
-  }, [screen, joinCode, selectedColor]);
+  }, [screen, joinCode]);
 
   // WebSocket lifecycle with automatic reconnect
   const connectWebSocket = useCallback(

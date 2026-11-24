@@ -34,7 +34,7 @@ Turn any house, campus floor, office, or backyard into **The Skeld**. One host P
 
 ## Prerequisites
 
-- **Node.js** `v20+` (recommended `v22+`) and **npm**
+- **Node.js** `v20.19+` or `v22.12+` (recommended `v22 LTS`) and **npm**
 - **MongoDB** *(Optional)* — Local `mongod` (`mongodb://127.0.0.1:27017`) or a [MongoDB Atlas](https://www.mongodb.com/atlas) cluster. If omitted or unreachable, the server automatically persists sessions locally.
 
 ---
@@ -95,7 +95,20 @@ NODE_ENV=production npm start
 
 Open **`http://localhost:3000`** on your Host PC!
 
-> **Troubleshooting (`'tsx' is not recognized` on Windows):** Make sure you ran `npm install` inside the project folder first so `node_modules/.bin/tsx` is installed. If you still see the error, run `npm install tsx` or start the server via `npx tsx server.ts`.
+> **Troubleshooting on Windows:**
+> - **`'tsx' is not recognized`:** Run `npm install` inside the project folder first so `node_modules/.bin/tsx` is installed, or start with `npx tsx server.ts`.
+> - **`Cannot find native binding` / `@rolldown/binding-win32-x64-msvc`:** This happens if `node_modules`/`package-lock.json` came from a failed install (`npm/cli#4828`) or your Node.js version is older than `20.19.0`.
+>   1. Update Node.js to **v22 LTS** (`>=22.12.0` or `>=20.19.0`).
+>   2. Delete `node_modules` and `package-lock.json`, then do a clean install:
+>      ```bat
+>      rmdir /s /q node_modules
+>      del package-lock.json
+>      npm install
+>      ```
+>   3. If the error still appears, install the Windows binding (or fallback WASI binding) explicitly:
+>      ```bat
+>      npm install --no-save @rolldown/binding-win32-x64-msvc
+>      ```
 
 ---
 
@@ -152,7 +165,7 @@ Players join the game from their smartphones, so phones must be able to reach yo
 1. In **Rules & Balance**, set:
    - **Impostors**: `1` or `2` *(2 Impostors requires at least 4 players and automatically makes 1 Impostor the **Shapeshifter**)*.
    - **Investigators**: `0`, `1`, or `2`.
-   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Sabotage Cooldown**, **Voting Time**, and **Confirm Ejects**.
+   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Sabotage Cooldown**, **Voting Time**, **Confirm Ejects**, and **Hide Manual Codes (Anti-Remote Kill)** *(hides short codes from printed sheets and scanner input so Impostors must scan physical QR badges up close)*.
 2. Players scan the **Join Mission QR Code** on the Host PC screen (via the Expo app or smartphone browser), enter their callsign, and pick the **Suit Color** matching the printed QR badge on their back.
 3. Click **Launch Mission**! Every phone plays the **SHHHHH! -> Role Reveal** splash screen, then switches to the **Plain Crewmate Stealth HUD**.
 

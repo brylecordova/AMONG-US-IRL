@@ -29,12 +29,14 @@ import {
 
 interface SkeldTaskModalProps {
   task: SkeldTaskDef;
+  isBlackoutRepair?: boolean;
   onComplete: () => void;
   onClose: () => void;
 }
 
 export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   task,
+  isBlackoutRepair = false,
   onComplete,
   onClose,
 }) => {
@@ -118,6 +120,11 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
         </div>
 
         <div className="p-4 space-y-3">
+          {isBlackoutRepair && (
+            <div className="bg-amber-500/15 border border-amber-400/60 rounded-xl px-3 py-2 text-xs font-mono font-bold text-amber-200">
+              EMERGENCY BLACKOUT REPAIR · Complete wiring to restore ship power!
+            </div>
+          )}
           <p className="text-xs text-slate-300 leading-relaxed">{task.instruction}</p>
           {renderTaskWidget()}
         </div>

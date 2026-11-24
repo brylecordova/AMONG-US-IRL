@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import {
+  buildWsUrl,
   ClientGameState,
   normalizeServerUrl,
   ParsedQrAction,
@@ -53,7 +54,12 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
     ]).start();
   }, [fadeAnim, slideAnim]);
 
-  // Fetch public lobby color availability whenever serverUrl & valid 5+ char code exist
+  const selectedColorRef = useRef<PlayerColorId>(selectedColor);
+  useEffect(() => {
+    selectedColorRef.current = selectedColor;
+  }, [selectedColor]);
+
+  // Real-time public lobby color availability whenever serverUrl & valid code exist
   useEffect(() => {
     const cleanBase = normalizeServerUrl(serverUrl);
     const cleanCode = sessionCode.trim().toUpperCase();
@@ -63,28 +69,70 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
     }
 
     let cancelled = false;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const applyTaken = (colors: PlayerColorId[]) => {
+      if (cancelled) return;
+      setTakenColors(colors);
+      if (colors.includes(selectedColorRef.current)) {
+        const firstFree = PLAYER_COLORS.find((c) => !colors.includes(c.id));
+        if (firstFree) setSelectedColor(firstFree.id);
+      }
+    };
+
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`${cleanBase}/api/sessions/${cleanCode}/public`);
         if (!res.ok) return;
         const data = (await res.json()) as { takenColors?: PlayerColorId[] };
-        if (!cancelled && Array.isArray(data.takenColors)) {
-          setTakenColors(data.takenColors);
-          if (data.takenColors.includes(selectedColor)) {
-            const firstFree = PLAYER_COLORS.find((c) => !data.takenColors?.includes(c.id));
-            if (firstFree) setSelectedColor(firstFree.id);
-          }
+        if (Array.isArray(data.takenColors)) {
+          applyTaken(data.takenColors);
         }
       } catch {
         // Ignore network errors while typing LAN URL
       }
+
+      const openWs = () => {
+        if (cancelled) return;
+        try {
+          ws = new WebSocket(buildWsUrl(cleanBase));
+          ws.onopen = () => {
+            ws?.send(JSON.stringify({ type: 'subscribe', sessionCode: cleanCode, role: 'PUBLIC' }));
+          };
+          ws.onmessage = (evt) => {
+            try {
+              const msg = JSON.parse(evt.data as string) as {
+                type?: string;
+                payload?: { takenColors?: PlayerColorId[] };
+              };
+              if (msg.type === 'state:public' && Array.isArray(msg.payload?.takenColors)) {
+                applyTaken(msg.payload.takenColors);
+              }
+            } catch {
+              // Ignore malformed frames
+            }
+          };
+          ws.onclose = () => {
+            if (!cancelled) {
+              reconnectTimer = setTimeout(openWs, 2500);
+            }
+          };
+        } catch {
+          // Ignore invalid URL while editing
+        }
+      };
+
+      openWs();
     }, 350);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) ws.close();
     };
-  }, [serverUrl, sessionCode, selectedColor]);
+  }, [serverUrl, sessionCode]);
 
   const handleJoinQrDetected = (parsed: ParsedQrAction) => {
     setShowQrScanner(false);

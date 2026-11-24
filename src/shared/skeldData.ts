@@ -234,6 +234,7 @@ export interface GameSettings {
   discussionSec: number;
   votingSec: number;
   confirmEjects: boolean;
+  hideManualCodes: boolean;
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
@@ -246,6 +247,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   discussionSec: 30,
   votingSec: 60,
   confirmEjects: true,
+  hideManualCodes: false,
 };
 
 export interface AssignedTask {

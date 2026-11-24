@@ -16,6 +16,7 @@ interface NativeQrScannerModalProps {
   visible: boolean;
   title?: string;
   subtitle?: string;
+  hideManualCodes?: boolean;
   onDetected: (parsed: ParsedQrAction, raw: string) => void;
   onClose: () => void;
 }
@@ -24,6 +25,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
   visible,
   title = 'Skeld Optical Scanner',
   subtitle = 'Point your phone camera at any Task, Player Back, Meeting, or Join QR code.',
+  hideManualCodes = false,
   onDetected,
   onClose,
 }) => {
@@ -155,28 +157,30 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
 
         {errorMsg ? <Text style={styles.errorBanner}>{errorMsg}</Text> : null}
 
-        <View style={styles.manualSection}>
-          <Text style={styles.manualLabel}>Manual Station / Suit Code Fallback</Text>
-          <View style={styles.manualRow}>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. WIR1, RED, EMRG"
-              placeholderTextColor="#64748B"
-              value={manualInput}
-              onChangeText={(txt) => {
-                setManualInput(txt);
-                setErrorMsg(null);
-              }}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              returnKeyType="go"
-              onSubmitEditing={handleManualSubmit}
-            />
-            <TouchableOpacity style={styles.submitBtn} onPress={handleManualSubmit}>
-              <Text style={styles.submitBtnText}>Verify</Text>
-            </TouchableOpacity>
+        {!hideManualCodes ? (
+          <View style={styles.manualSection}>
+            <Text style={styles.manualLabel}>Manual Station / Suit Code Fallback</Text>
+            <View style={styles.manualRow}>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. WIR1, RED, EMRG"
+                placeholderTextColor="#64748B"
+                value={manualInput}
+                onChangeText={(txt) => {
+                  setManualInput(txt);
+                  setErrorMsg(null);
+                }}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="go"
+                onSubmitEditing={handleManualSubmit}
+              />
+              <TouchableOpacity style={styles.submitBtn} onPress={handleManualSubmit}>
+                <Text style={styles.submitBtnText}>Verify</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        ) : null}
       </View>
     </Modal>
   );
