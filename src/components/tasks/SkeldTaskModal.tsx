@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { X } from 'lucide-react';
 import { SkeldTaskDef } from '../../shared/skeldData';
 import {
@@ -28,14 +29,12 @@ import {
 
 interface SkeldTaskModalProps {
   task: SkeldTaskDef;
-  isFakeTask?: boolean;
   onComplete: () => void;
   onClose: () => void;
 }
 
 export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   task,
-  isFakeTask = false,
   onComplete,
   onClose,
 }) => {
@@ -77,8 +76,19 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 18 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 12 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+        className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl"
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0F1520]">
           <div>
             <h3 className="font-display text-2xl font-bold tracking-wide text-white leading-none">
@@ -92,12 +102,6 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
                 <>
                   <span aria-hidden="true">·</span>
                   <span className="text-cyan-300">Visual</span>
-                </>
-              )}
-              {isFakeTask && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-amber-400">Cover Practice</span>
                 </>
               )}
             </div>
@@ -117,7 +121,7 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
           <p className="text-xs text-slate-300 leading-relaxed">{task.instruction}</p>
           {renderTaskWidget()}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

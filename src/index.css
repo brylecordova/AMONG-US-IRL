@@ -23,6 +23,25 @@
   font-variant-numeric: tabular-nums;
 }
 
+@keyframes scannerSweep {
+  0% {
+    transform: translateY(-68px);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateY(68px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-68px);
+    opacity: 0.4;
+  }
+}
+
+.animate-scanner-sweep {
+  animation: scannerSweep 2.1s ease-in-out infinite;
+}
+
 @media print {
   @page {
     size: letter portrait;

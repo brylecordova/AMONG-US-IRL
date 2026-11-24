@@ -216,6 +216,13 @@ export const PLAYER_COLORS: PlayerColorDef[] = [
 export type SecretRole = 'CREWMATE' | 'INVESTIGATOR' | 'IMPOSTOR' | 'SHAPESHIFTER';
 export type PublicAlignment = 'CREWMATE' | 'IMPOSTOR';
 export type GamePhase = 'LOBBY' | 'PLAYING' | 'MEETING' | 'ENDED';
+export type SabotageKind = 'BLACKOUT' | 'SIGNAL_JAM';
+
+export interface ActiveSabotage {
+  kind: SabotageKind;
+  startedAt: number;
+  expiresAt?: number;
+}
 
 export interface GameSettings {
   impostorCount: 1 | 2;
@@ -223,6 +230,7 @@ export interface GameSettings {
   tasksPerPlayer: number;
   killCooldownSec: number;
   scanCooldownSec: number;
+  sabotageCooldownSec: number;
   discussionSec: number;
   votingSec: number;
   confirmEjects: boolean;
@@ -234,6 +242,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   tasksPerPlayer: 5,
   killCooldownSec: 25,
   scanCooldownSec: 20,
+  sabotageCooldownSec: 30,
   discussionSec: 30,
   votingSec: 60,
   confirmEjects: true,
@@ -255,13 +264,16 @@ export interface PublicPlayer {
   hasArrived: boolean;
   hasVoted: boolean;
   revealedRole?: SecretRole;
+  rejoinCode?: string;
 }
 
 export interface SelfPlayer extends PublicPlayer {
+  rejoinCode: string;
   secretRole: SecretRole;
   assignedTasks: AssignedTask[];
   killCooldownRemainingSec: number;
   scanCooldownRemainingSec: number;
+  sabotageCooldownRemainingSec: number;
   teammates: Array<{ playerId: string; name: string; color: PlayerColorId; role: SecretRole }>;
 }
 
@@ -303,6 +315,7 @@ export interface ClientGameState {
   players: PublicPlayer[];
   self: SelfPlayer;
   taskProgress: TaskProgress;
+  activeSabotage: ActiveSabotage | null;
   meeting: MeetingSummary | null;
   winner: 'CREWMATES' | 'IMPOSTORS' | null;
   winReason: string | null;
@@ -315,6 +328,7 @@ export interface HostGameState {
   settings: GameSettings;
   players: PublicPlayer[];
   taskProgress: TaskProgress;
+  activeSabotage: ActiveSabotage | null;
   meeting: MeetingSummary | null;
   winner: 'CREWMATES' | 'IMPOSTORS' | null;
   winReason: string | null;

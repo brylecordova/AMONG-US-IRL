@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import jsQR from 'jsqr';
 import { Camera, ImagePlus, Keyboard, RefreshCw, SwitchCamera, X } from 'lucide-react';
 import { parseQrOrManualInput, ParsedQrAction } from '../shared/skeldData';
@@ -105,6 +106,38 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       }
       setCameraActive(true);
 
+      type NativeBarcodeDetector = {
+        detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue?: string }>>;
+      };
+      const BarcodeDetectorCtor = (
+        window as unknown as {
+          BarcodeDetector?: new (opts: { formats: string[] }) => NativeBarcodeDetector;
+        }
+      ).BarcodeDetector;
+
+      let nativeDetector: NativeBarcodeDetector | null = null;
+      if (BarcodeDetectorCtor) {
+        try {
+          nativeDetector = new BarcodeDetectorCtor({ formats: ['qr_code'] });
+        } catch {
+          nativeDetector = null;
+        }
+      }
+
+      let nativeDetecting = false;
+
+      const handleDecodedText = (rawText: string): boolean => {
+        const parsed = parseQrOrManualInput(rawText);
+        if (parsed && !detectedRef.current) {
+          detectedRef.current = true;
+          soundEngine.playClick();
+          stopCamera();
+          onDetected(parsed);
+          return true;
+        }
+        return false;
+      };
+
       const scanFrame = () => {
         if (detectedRef.current) return;
         const v = videoRef.current;
@@ -113,6 +146,25 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
           const w = v.videoWidth;
           const h = v.videoHeight;
           if (w > 0 && h > 0) {
+            if (nativeDetector && !nativeDetecting) {
+              nativeDetecting = true;
+              nativeDetector
+                .detect(v)
+                .then((codes) => {
+                  for (const item of codes) {
+                    if (item.rawValue && handleDecodedText(item.rawValue)) {
+                      return;
+                    }
+                  }
+                })
+                .catch(() => {
+                  nativeDetector = null;
+                })
+                .finally(() => {
+                  nativeDetecting = false;
+                });
+            }
+
             c.width = w;
             c.height = h;
             const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -120,15 +172,8 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
               ctx.drawImage(v, 0, 0, w, h);
               const imgData = ctx.getImageData(0, 0, w, h);
               const code = jsQR(imgData.data, w, h, { inversionAttempts: 'attemptBoth' });
-              if (code && code.data) {
-                const parsed = parseQrOrManualInput(code.data);
-                if (parsed) {
-                  detectedRef.current = true;
-                  soundEngine.playClick();
-                  stopCamera();
-                  onDetected(parsed);
-                  return;
-                }
+              if (code && code.data && handleDecodedText(code.data)) {
+                return;
               }
             }
           }
@@ -210,8 +255,19 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         : 'border-cyan-500/60';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="w-full max-w-md max-h-[94dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-t-3xl sm:rounded-2xl shadow-2xl">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 36, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 24, scale: 0.97 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+        className="w-full max-w-md max-h-[94dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-t-3xl sm:rounded-2xl shadow-2xl"
+      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 bg-[#0F1520]">
           <div className="min-w-0 pr-2">
             <h3 className="font-display text-2xl font-bold text-white leading-none">{title}</h3>
@@ -247,7 +303,9 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             {cameraActive ? (
               <>
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-40 h-40 border-2 border-white/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
+                  <div className="relative w-40 h-40 border-2 border-white/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] overflow-hidden flex items-center justify-center">
+                    <div className="w-36 h-0.5 bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-scanner-sweep" />
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -318,7 +376,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             {manualError && <p className="text-xs text-red-400">{manualError}</p>}
           </form>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

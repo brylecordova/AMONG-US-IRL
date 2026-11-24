@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { getColorDef, PlayerColorId } from '../shared/skeldData';
 
 interface CrewmateAvatarProps {
@@ -7,6 +8,7 @@ interface CrewmateAvatarProps {
   ghost?: boolean;
   size?: number;
   className?: string;
+  animate?: boolean;
 }
 
 export const CrewmateAvatar: React.FC<CrewmateAvatarProps> = ({
@@ -15,6 +17,7 @@ export const CrewmateAvatar: React.FC<CrewmateAvatarProps> = ({
   ghost = false,
   size = 44,
   className = '',
+  animate = false,
 }) => {
   const c = getColorDef(color);
 
@@ -53,13 +56,13 @@ export const CrewmateAvatar: React.FC<CrewmateAvatarProps> = ({
     );
   }
 
-  return (
+  const svg = (
     <svg
       width={size}
       height={size}
       viewBox="0 0 64 64"
       fill="none"
-      className={`${ghost ? 'opacity-55' : ''} ${className}`}
+      className={`${ghost ? 'opacity-55' : ''} ${animate ? '' : className}`}
       aria-label={`${c.label} crewmate`}
     >
       {/* Backpack */}
@@ -102,5 +105,19 @@ export const CrewmateAvatar: React.FC<CrewmateAvatarProps> = ({
       />
       <rect x="33" y="19.5" width="12" height="4" rx="2" fill="#E0F2FE" />
     </svg>
+  );
+
+  if (!animate) {
+    return svg;
+  }
+
+  return (
+    <motion.div
+      animate={ghost ? { y: [0, -5, 0], opacity: [0.55, 0.75, 0.55] } : { y: [0, -3.5, 0] }}
+      transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+      className={`inline-flex shrink-0 ${className}`}
+    >
+      {svg}
+    </motion.div>
   );
 };

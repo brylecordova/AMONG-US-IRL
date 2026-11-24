@@ -22,8 +22,11 @@ Turn any house, campus floor, office, or backyard into **The Skeld**. One host P
   - **Investigator**: Special Crewmate role that can scan alive players' back QRs to reveal their **Suit Color** and **Role Alignment** (`CREWMATE` or `IMPOSTOR`).
   - **Impostor**: Scan an alive Crewmate's back QR to eliminate them—triggering an immediate **"YOU HAVE BEEN KILLED"** screen on the victim's phone and converting them into a Ghost.
   - **Shapeshifter** *(auto-assigned when 2 Impostors are enabled)*: One of the two Impostors is designated Shapeshifter—when scanned by an Investigator, they register as **`CREWMATE`** alongside their true suit color.
-- **Dual-Mode QR Scanner (Camera + Manual Fallback)**
-  - Uses the smartphone's rear camera (`jsQR`) for instant scanning, plus a 1-tap **Manual Code Entry** fallback (`WIR1`, `RED`, `EMRG`, etc.) so gameplay works smoothly even on non-HTTPS LAN connections where mobile browsers restrict camera access.
+- **Dual-Mode QR Scanner + Native Expo Mobile App (`mobile-expo/`)**
+  - Browser clients support live `jsQR` camera scanning, a photo capture fallback, and 1-tap manual code entry (`WIR1`, `RED`, `EMRG`).
+  - Includes a standalone **React Native (Expo)** app inside `mobile-expo/` powered by `expo-camera` so Android and iOS players get instant native rear-camera QR scanning over plain `http://192.168.x.x:3000` LAN connections without needing HTTPS certificates.
+- **Role Reveal Splash & Plain Crewmate Stealth HUD**
+  - Plays an animated **"SHHHHH!" -> Role Reveal** splash screen at mission launch, then hides all special role UI behind an identical **Plain Crewmate HUD** (`Scan QR` + `Terminal`) so accidental shoulder-surfing never exposes Impostors or Investigators. Tap **Terminal** and unlock privately to check cooldowns or trigger sabotages.
 - **MongoDB Persistence with Automatic Local Fallback**
   - Connects to MongoDB via `MONGODB_URI` when configured/running, and automatically falls back to a local disk-backed JSON store (`.skeld-data/sessions.json`) if no MongoDB instance is reachable.
 
@@ -96,6 +99,22 @@ Open **`http://localhost:3000`** on your Host PC!
 
 ---
 
+## Native Mobile App (React Native / Expo)
+
+For the smoothest Android & iOS experience—especially **live rear-camera QR scanning on Android over plain Wi-Fi (`http://192.168.x.x:3000`)** without browser HTTPS restrictions—run the companion Expo client inside `mobile-expo/`:
+
+```bash
+cd mobile-expo
+npm install
+npx expo start
+```
+
+1. Open **Expo Go** on Android/iOS (connected to the same Wi-Fi as the Host PC) and scan the terminal QR code.
+2. In the app, tap **Scan Host PC Join QR Code** and point your phone at the **Join Mission** QR displayed on the Host PC—both the LAN server URL and Mission Code fill in automatically.
+3. See [`mobile-expo/README.md`](./mobile-expo/README.md) for optional standalone Android APK build instructions via EAS.
+
+---
+
 ## Local Network (LAN) & Port Forwarding Guide
 
 Players join the game from their smartphones, so phones must be able to reach your Host PC on port `3000`:
@@ -113,11 +132,9 @@ Players join the game from their smartphones, so phones must be able to reach yo
 2. Paste the public URL (e.g., `https://your-host.example.com` or `http://<public-ip>:3000`) into the **Host Address** field on **Mission Control** and click **Update QR**.
 
 > **Smartphone & Localhost Camera Notes:**
+> - **Best on Android LAN:** Use the **React Native (Expo)** app in `mobile-expo/` for unrestricted live `CameraView` QR scanning over plain `http://192.168.x.x:3000`.
 > - **`localhost` (`http://localhost:3000`):** Browsers allow live camera streaming on `localhost`. If your webcam does not open automatically, ensure camera permission is allowed in your browser's site settings (padlock icon) and click **Retry Camera**.
-> - **LAN IP (`http://192.168.x.x:3000`):** Mobile Safari/Chrome blocks live `getUserMedia` video streams on plain HTTP LAN IP addresses. You still have **two zero-setup ways to play**:
->   1. Tap **Take Photo of QR Code (HTTP Camera Fallback)** inside the scanner to snap a photo using your phone's native camera.
->   2. Or type the 3–4 letter manual code (`WIR1`, `RED`, `EMRG`) printed on every QR card.
-> - **Optional Full Live Camera on LAN:** Place TLS certs at `./certs/key.pem` and `./certs/cert.pem` (or set `SSL_KEY_FILE` / `SSL_CERT_FILE` in `.env`)—the server automatically boots in **HTTPS** mode, or use `npx cloudflared tunnel --url http://localhost:3000`.
+> - **Browser on LAN IP (`http://192.168.x.x:3000`):** Mobile Safari/Chrome blocks live `getUserMedia` video streams on plain HTTP LAN IP addresses. Inside the web scanner you can still tap **Take Photo of QR Code (HTTP Camera Fallback)** or enter manual codes (`WIR1`, `RED`, `EMRG`), or boot with `./certs/key.pem` & `./certs/cert.pem` (`SSL_KEY_FILE` / `SSL_CERT_FILE`).
 
 ---
 
@@ -135,14 +152,17 @@ Players join the game from their smartphones, so phones must be able to reach yo
 1. In **Rules & Balance**, set:
    - **Impostors**: `1` or `2` *(2 Impostors requires at least 4 players and automatically makes 1 Impostor the **Shapeshifter**)*.
    - **Investigators**: `0`, `1`, or `2`.
-   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Voting Time**, and **Confirm Ejects**.
-2. Players scan the **Join Mission QR Code** on the Host PC screen with their phone camera, enter their callsign, and pick the **Suit Color** matching the printed QR badge on their back.
-3. Click **Launch Mission**!
+   - **Tasks Per Player**, **Kill Cooldown**, **Investigator Scan Cooldown**, **Sabotage Cooldown**, **Voting Time**, and **Confirm Ejects**.
+2. Players scan the **Join Mission QR Code** on the Host PC screen (via the Expo app or smartphone browser), enter their callsign, and pick the **Suit Color** matching the printed QR badge on their back.
+3. Click **Launch Mission**! Every phone plays the **SHHHHH! -> Role Reveal** splash screen, then switches to the **Plain Crewmate Stealth HUD**.
 
 ### Step 3: Gameplay Loop
-- **Completing Tasks**: Walk to a physical Task QR station, tap **Scan Task / Body** on your phone, scan the QR (or type its 4-character manual code), and beat the interactive Skeld mini-game.
-- **Investigating (Investigator only)**: Tap **Investigate** and scan an alive player's back QR to reveal their **Suit Color** and whether they read as **`CREWMATE`** or **`IMPOSTOR`** *(Shapeshifter reads as `CREWMATE`!)*.
-- **Eliminating (Impostors / Shapeshifter)**: Tap **Kill QR** and scan an alive Crewmate's back QR when your kill cooldown is `0s`. Their phone immediately locks with **"YOU HAVE BEEN KILLED"** and enters Ghost Mode (they can still finish tasks silently!).
+- **Completing Tasks**: Walk to a physical Task QR station, tap **Scan QR** on your phone, scan the QR (or type its 4-character manual code), and beat the interactive Skeld mini-game.
+- **Impostor Eliminations & Investigations (Unified `Scan QR`)**: All players use the same **Scan QR** button—if an **Impostor/Shapeshifter** scans an alive Crewmate's back badge while kill cooldown is ready, the kill executes automatically (Victim gets **"YOU HAVE BEEN KILLED"**); if an **Investigator** scans an alive player while scan cooldown is ready, they receive the player's **Suit Color** and **`CREWMATE` / `IMPOSTOR`** reading *(Shapeshifter reads as `CREWMATE`!)*.
+- **Private Ship Terminal & Impostor Sabotages**: Tap **Terminal** and unlock behind the **Privacy Lock** to inspect your hidden role, cooldown timers, or trigger Impostor sabotages:
+  - **Kill Power (Blackout)**: Locks all regular tasks until an alive player scans and completes **Fix Wiring (`WIR1`)** to restore grid power.
+  - **Signal Jam (60s)**: Disables the Cafeteria **Emergency Meeting (`EMRG`)** button for 60 seconds (dead body reports still work).
+- **Rejoining After Page Refresh**: Every player receives a unique 5-character **Player Rejoin Code** (shown in Lobby/Terminal and on the Host PC's Crew Manifest). If a player refreshes or disconnects, choose **Rejoin Game** and enter the **Mission Code** + **Player Rejoin Code** to restore their session.
 - **Reporting & Voting**: Any alive player who discovers a killed player scans the dead player's back QR (or scans the Cafeteria **Emergency Button** QR). Every phone sounds an alarm and opens the **Gathering Check-In** screen—each alive player walks to the meeting table and taps **`HERE!`**. Once all alive players (excluding dead players) have checked in, the **Discussion** countdown and **Voting** begin automatically.
 - **Winning**:
   - **Crewmates Win** by ejecting all Impostors OR reaching **100%** global task completion.
@@ -180,5 +200,6 @@ Players join the game from their smartphones, so phones must be able to reach yo
 ## Tech Stack
 
 - **Backend**: Node.js, Express, `ws` (WebSockets), `mongodb` driver (with automatic JSON persistence fallback)
-- **Frontend**: React 19, TypeScript, Tailwind CSS v4, Lucide Icons, Web Audio API synthesizer
-- **QR Engine**: `qrcode` (client-side print & join QR generation), `jsqr` (in-browser camera QR decoding)
+- **Web Frontend**: React 19, TypeScript, Tailwind CSS v4, Motion (`motion/react`), Lucide Icons, Web Audio API synthesizer
+- **Mobile Client (`mobile-expo/`)**: React Native (Expo SDK 52), `expo-camera` (`CameraView` QR scanning), React Native `Animated`, `react-native-svg`
+- **QR Engine**: `qrcode` (print & join QR generation), `jsqr` (web camera QR decoding), native `expo-camera` barcode scanner

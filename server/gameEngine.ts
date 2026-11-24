@@ -10,6 +10,7 @@ import {
   PlayerColorId,
   PublicAlignment,
   PublicPlayer,
+  SabotageKind,
   SecretRole,
   SKELD_TASKS,
   SkeldTaskId,
@@ -37,6 +38,19 @@ function generateSessionCode(): string {
   return out;
 }
 
+function generateRejoinCode(existingPlayers: StoredPlayer[]): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const taken = new Set(existingPlayers.map((p) => p.rejoinCode));
+  for (let attempt = 0; attempt < 100; attempt++) {
+    let out = '';
+    for (let i = 0; i < 5; i++) {
+      out += chars[crypto.randomInt(0, chars.length)];
+    }
+    if (!taken.has(out)) return out;
+  }
+  return randomToken(3).toUpperCase();
+}
+
 function sanitizePlayerName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const cleaned = raw.replace(/\s+/g, ' ').trim();
@@ -56,6 +70,12 @@ function sanitizeSettings(raw: Partial<GameSettings> | undefined, existing: Game
     tasksPerPlayer: clamp(raw?.tasksPerPlayer, 2, 12, existing.tasksPerPlayer),
     killCooldownSec: clamp(raw?.killCooldownSec, 5, 90, existing.killCooldownSec),
     scanCooldownSec: clamp(raw?.scanCooldownSec, 5, 90, existing.scanCooldownSec),
+    sabotageCooldownSec: clamp(
+      raw?.sabotageCooldownSec,
+      10,
+      90,
+      existing.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec,
+    ),
     discussionSec: clamp(raw?.discussionSec, 10, 120, existing.discussionSec),
     votingSec: clamp(raw?.votingSec, 15, 180, existing.votingSec),
     confirmEjects: typeof raw?.confirmEjects === 'boolean' ? raw.confirmEjects : existing.confirmEjects,
@@ -111,7 +131,7 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
   };
 }
 
-function projectPublicPlayers(session: StoredSession): PublicPlayer[] {
+function projectPublicPlayers(session: StoredSession, includeRejoinCodes = false): PublicPlayer[] {
   const revealAll = session.phase === 'ENDED';
   const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
   return session.players.map((p) => ({
@@ -122,6 +142,7 @@ function projectPublicPlayers(session: StoredSession): PublicPlayer[] {
     connected: p.connected,
     hasArrived: arrivedSet.has(p.playerId),
     hasVoted: Boolean(session.meeting?.votes[p.playerId]),
+    ...(includeRejoinCodes ? { rejoinCode: p.rejoinCode } : {}),
     ...(revealAll
       ? { revealedRole: p.secretRole }
       : !p.alive && session.settings.confirmEjects && session.meeting?.ejectedPlayer?.playerId === p.playerId
@@ -144,15 +165,18 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
 
   const killElapsed = Math.floor((now - self.lastKillAt) / 1000);
   const scanElapsed = Math.floor((now - self.lastScanAt) / 1000);
+  const sabotageCooldownSec = session.settings.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec;
+  const sabotageElapsed = session.lastSabotageAt ? Math.floor((now - session.lastSabotageAt) / 1000) : sabotageCooldownSec;
   const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
 
   return {
     sessionCode: session.sessionCode,
     phase: session.phase,
     settings: session.settings,
-    players: projectPublicPlayers(session),
+    players: projectPublicPlayers(session, false),
     self: {
       playerId: self.playerId,
+      rejoinCode: self.rejoinCode || '',
       name: self.name,
       color: self.color,
       alive: self.alive,
@@ -169,10 +193,15 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
         self.secretRole === 'INVESTIGATOR' && session.phase === 'PLAYING'
           ? Math.max(0, session.settings.scanCooldownSec - scanElapsed)
           : 0,
+      sabotageCooldownRemainingSec:
+        isImpostorTeam && session.phase === 'PLAYING' && !session.activeSabotage
+          ? Math.max(0, sabotageCooldownSec - sabotageElapsed)
+          : 0,
       teammates,
       ...(session.phase === 'ENDED' ? { revealedRole: self.secretRole } : {}),
     },
     taskProgress: computeTaskProgress(session),
+    activeSabotage: session.activeSabotage ?? null,
     meeting: projectMeeting(session, session.meeting),
     winner: session.winner,
     winReason: session.winReason,
@@ -185,8 +214,9 @@ export function projectForHost(session: StoredSession, lanUrls: string[]): HostG
     sessionCode: session.sessionCode,
     phase: session.phase,
     settings: session.settings,
-    players: projectPublicPlayers(session),
+    players: projectPublicPlayers(session, true),
     taskProgress: computeTaskProgress(session),
+    activeSabotage: session.activeSabotage ?? null,
     meeting: projectMeeting(session, session.meeting),
     winner: session.winner,
     winReason: session.winReason,
@@ -214,6 +244,8 @@ export async function createGameSession(publicUrl: string): Promise<{
     phase: 'LOBBY',
     settings: { ...DEFAULT_GAME_SETTINGS },
     players: [],
+    activeSabotage: null,
+    lastSabotageAt: 0,
     meeting: null,
     winner: null,
     winReason: null,
@@ -289,6 +321,7 @@ export async function joinGameSession(
   const player: StoredPlayer = {
     playerId: randomToken(8),
     playerToken: randomToken(24),
+    rejoinCode: generateRejoinCode(session.players),
     name,
     color,
     secretRole: 'CREWMATE',
@@ -300,6 +333,30 @@ export async function joinGameSession(
   };
 
   session.players.push(player);
+  await saveSession(session);
+  return { session, player };
+}
+
+export async function rejoinGameSession(
+  sessionCode: string,
+  rawRejoinCode: unknown,
+): Promise<{ session: StoredSession; player: StoredPlayer }> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Mission session code not found.');
+  if (typeof rawRejoinCode !== 'string') {
+    throw new Error('Enter your 5-character Player Rejoin Code.');
+  }
+  const cleaned = rawRejoinCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) {
+    throw new Error('Enter your 5-character Player Rejoin Code.');
+  }
+
+  const player = session.players.find((p) => (p.rejoinCode || '').toUpperCase() === cleaned);
+  if (!player) {
+    throw new Error('Player Rejoin Code not recognized in this session.');
+  }
+
+  player.connected = true;
   await saveSession(session);
   return { session, player };
 }
@@ -401,6 +458,8 @@ export async function startMission(
   }
 
   session.phase = 'PLAYING';
+  session.activeSabotage = null;
+  session.lastSabotageAt = 0;
   session.meeting = null;
   session.winner = null;
   session.winReason = null;
@@ -418,6 +477,8 @@ export async function resetMissionToLobby(
   if (session.hostToken !== hostToken) throw new Error('Unauthorized host token.');
 
   session.phase = 'LOBBY';
+  session.activeSabotage = null;
+  session.lastSabotageAt = 0;
   session.meeting = null;
   session.winner = null;
   session.winReason = null;
@@ -438,6 +499,7 @@ function evaluateWinConditions(session: StoredSession): boolean {
   const progress = computeTaskProgress(session);
   if (progress.total > 0 && progress.completed >= progress.total) {
     session.phase = 'ENDED';
+    session.activeSabotage = null;
     session.meeting = null;
     session.winner = 'CREWMATES';
     session.winReason = 'All Skeld station tasks have been completed.';
@@ -453,6 +515,7 @@ function evaluateWinConditions(session: StoredSession): boolean {
 
   if (aliveImpostors === 0 && session.players.length > 0) {
     session.phase = 'ENDED';
+    session.activeSabotage = null;
     session.meeting = null;
     session.winner = 'CREWMATES';
     session.winReason = 'All Impostors have been eliminated from The Skeld.';
@@ -461,6 +524,7 @@ function evaluateWinConditions(session: StoredSession): boolean {
 
   if (aliveImpostors >= aliveCrew && aliveImpostors > 0) {
     session.phase = 'ENDED';
+    session.activeSabotage = null;
     session.meeting = null;
     session.winner = 'IMPOSTORS';
     session.winReason = 'Impostors reached crew parity and seized control of the ship.';
@@ -470,11 +534,64 @@ function evaluateWinConditions(session: StoredSession): boolean {
   return false;
 }
 
+export async function triggerSabotage(
+  sessionCode: string,
+  playerToken: string,
+  kind: SabotageKind,
+): Promise<StoredSession> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'PLAYING') {
+    throw new Error('Sabotages can only be triggered during active gameplay.');
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+  if (!player.alive) throw new Error('Eliminated Impostors cannot trigger sabotages.');
+  if (player.secretRole !== 'IMPOSTOR' && player.secretRole !== 'SHAPESHIFTER') {
+    throw new Error('Only Impostors can trigger ship sabotages.');
+  }
+
+  const now = Date.now();
+  if (session.activeSabotage) {
+    if (
+      session.activeSabotage.kind === 'SIGNAL_JAM' &&
+      session.activeSabotage.expiresAt &&
+      now >= session.activeSabotage.expiresAt
+    ) {
+      session.activeSabotage = null;
+    } else {
+      throw new Error(
+        session.activeSabotage.kind === 'BLACKOUT'
+          ? 'Power Blackout is already active.'
+          : 'Signal Jam is already active.',
+      );
+    }
+  }
+
+  const cooldownSec = session.settings.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec;
+  if (session.lastSabotageAt) {
+    const elapsedSec = Math.floor((now - session.lastSabotageAt) / 1000);
+    if (elapsedSec < cooldownSec) {
+      throw new Error(`Sabotage module recharging: ${cooldownSec - elapsedSec}s remaining.`);
+    }
+  }
+
+  session.activeSabotage =
+    kind === 'SIGNAL_JAM'
+      ? { kind: 'SIGNAL_JAM', startedAt: now, expiresAt: now + 60_000 }
+      : { kind: 'BLACKOUT', startedAt: now };
+  session.lastSabotageAt = now;
+
+  await saveSession(session);
+  return session;
+}
+
 export async function completePlayerTask(
   sessionCode: string,
   playerToken: string,
   taskId: SkeldTaskId,
-): Promise<{ session: StoredSession; wasCrewTask: boolean }> {
+): Promise<{ session: StoredSession; wasCrewTask: boolean; powerRestored: boolean }> {
   const session = await getSession(sessionCode);
   if (!session) throw new Error('Session not found.');
   if (session.phase !== 'PLAYING') {
@@ -484,20 +601,41 @@ export async function completePlayerTask(
   const player = session.players.find((p) => p.playerToken === playerToken);
   if (!player) throw new Error('Player session invalid.');
 
+  let powerRestored = false;
+  if (session.activeSabotage?.kind === 'BLACKOUT') {
+    if (taskId !== 'fix-wiring') {
+      throw new Error(
+        'Power Blackout active! Tasks are locked until an alive player scans Fix Wiring (WIR1) and restores power.',
+      );
+    }
+    if (!player.alive) {
+      throw new Error(
+        'Power Blackout active! Ghosts cannot restore ship power — an alive player must complete Fix Wiring (WIR1).',
+      );
+    }
+    session.activeSabotage = null;
+    session.lastSabotageAt = Date.now();
+    powerRestored = true;
+  }
+
   const taskItem = player.assignedTasks.find((t) => t.taskId === taskId);
   if (!taskItem) {
-    // Allow Impostors or Crewmates practicing unassigned stations without crashing, just don't count it
-    return { session, wasCrewTask: false };
+    if (powerRestored) {
+      await saveSession(session);
+    }
+    return { session, wasCrewTask: false, powerRestored };
   }
 
   if (!taskItem.completed) {
     taskItem.completed = true;
     evaluateWinConditions(session);
     await saveSession(session);
+  } else if (powerRestored) {
+    await saveSession(session);
   }
 
   const isCrew = player.secretRole === 'CREWMATE' || player.secretRole === 'INVESTIGATOR';
-  return { session, wasCrewTask: isCrew };
+  return { session, wasCrewTask: isCrew, powerRestored };
 }
 
 export type ScanBackOutcome =
@@ -559,6 +697,7 @@ export async function processPlayerBackScan(
   if (!target.alive) {
     const now = Date.now();
     session.phase = 'MEETING';
+    session.activeSabotage = null;
     session.meeting = {
       id: randomToken(8),
       stage: 'GATHERING',
@@ -664,7 +803,17 @@ export async function triggerEmergencyButton(
   if (!caller.alive) throw new Error('Ghosts cannot call an Emergency Meeting.');
 
   const now = Date.now();
+  if (session.activeSabotage?.kind === 'SIGNAL_JAM') {
+    const expiresAt = session.activeSabotage.expiresAt || 0;
+    if (now < expiresAt) {
+      const remaining = Math.ceil((expiresAt - now) / 1000);
+      throw new Error(`Signal Jam active! Emergency Meetings are disabled for ${remaining}s.`);
+    }
+    session.activeSabotage = null;
+  }
+
   session.phase = 'MEETING';
+  session.activeSabotage = null;
   session.meeting = {
     id: randomToken(8),
     stage: 'GATHERING',
@@ -862,12 +1011,29 @@ export async function castMeetingVote(
 
 export async function advanceSessionTimers(sessionCode: string): Promise<boolean> {
   const session = await getSession(sessionCode);
-  if (!session || session.phase !== 'MEETING' || !session.meeting) return false;
+  if (!session) return false;
+
+  const now = Date.now();
+
+  if (session.phase === 'PLAYING') {
+    if (
+      session.activeSabotage?.kind === 'SIGNAL_JAM' &&
+      session.activeSabotage.expiresAt &&
+      now >= session.activeSabotage.expiresAt
+    ) {
+      session.activeSabotage = null;
+      session.lastSabotageAt = now;
+      await saveSession(session);
+      return true;
+    }
+    return false;
+  }
+
+  if (session.phase !== 'MEETING' || !session.meeting) return false;
 
   // Do not run discussion/voting countdowns while players are physically walking to the table
   if (session.meeting.stage === 'GATHERING') return false;
 
-  const now = Date.now();
   let changed = false;
 
   if (session.meeting.stage === 'DISCUSSION' && now >= session.meeting.discussionEndsAt) {
@@ -883,6 +1049,7 @@ export async function advanceSessionTimers(sessionCode: string): Promise<boolean
     if (!ended) {
       session.phase = 'PLAYING';
       session.meeting = null;
+      session.lastSabotageAt = now;
       // Reset cooldowns cleanly after a meeting
       for (const p of session.players) {
         p.lastKillAt = now;

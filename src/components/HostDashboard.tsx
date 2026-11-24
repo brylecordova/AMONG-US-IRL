@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Check,
   Printer,
+  Radio,
   RotateCcw,
   ShieldAlert,
   Sliders,
@@ -9,6 +11,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  ZapOff,
 } from 'lucide-react';
 import {
   buildMeetingQrPayload,
@@ -308,48 +311,89 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
 
               {/* Task Progress Bar */}
               <div className="h-4 bg-slate-950 rounded-full overflow-hidden border border-white/10">
-                <div
-                  className="h-full bg-emerald-500 transition-all duration-300"
-                  style={{ width: `${state.taskProgress.percentage}%` }}
+                <motion.div
+                  className="h-full bg-emerald-500"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${state.taskProgress.percentage}%` }}
+                  transition={{ type: 'spring', stiffness: 120, damping: 20 }}
                 />
               </div>
 
-              {/* Active Meeting Banner */}
-              {state.phase === 'MEETING' && state.meeting && (
-                <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <ShieldAlert className="w-7 h-7 text-red-400 shrink-0" />
+              {/* Active Sabotage Banner */}
+              <AnimatePresence>
+                {state.phase === 'PLAYING' && state.activeSabotage && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="bg-amber-500/15 border border-amber-400/50 rounded-xl p-4 flex items-center gap-3 animate-pulse"
+                  >
+                    {state.activeSabotage.kind === 'BLACKOUT' ? (
+                      <ZapOff className="w-6 h-6 text-amber-300 shrink-0" />
+                    ) : (
+                      <Radio className="w-6 h-6 text-amber-300 shrink-0" />
+                    )}
                     <div>
-                      <div className="font-display text-xl font-bold text-white">
-                        {state.meeting.reason === 'BODY_REPORTED'
-                          ? `Dead Body Reported: ${state.meeting.victimName}`
-                          : `Emergency Meeting Called by ${state.meeting.reporterName}`}
+                      <div className="font-display text-xl font-bold text-amber-200">
+                        {state.activeSabotage.kind === 'BLACKOUT'
+                          ? 'SABOTAGE: POWER BLACKOUT'
+                          : 'SABOTAGE: COMMS SIGNAL JAM'}
                       </div>
-                      <div className="text-xs text-red-200 mt-0.5 font-mono tabular-nums">
-                        {state.meeting.verdictMessage
-                          ? state.meeting.verdictMessage
-                          : state.meeting.stage === 'GATHERING'
-                            ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
-                            : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                      <div className="text-xs text-amber-100/80 mt-0.5">
+                        {state.activeSabotage.kind === 'BLACKOUT'
+                          ? 'All tasks are locked until an alive player scans and completes Fix Wiring (WIR1).'
+                          : 'Emergency Meeting button (EMRG) is disabled for 60 seconds.'}
                       </div>
                     </div>
-                  </div>
-                  {state.meeting.stage === 'GATHERING' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => callHostApi('start-discussion')}
-                      className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap"
-                    >
-                      Start Discussion Now
-                    </button>
-                  )}
-                </div>
-              )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Active Meeting Banner */}
+              <AnimatePresence>
+                {state.phase === 'MEETING' && state.meeting && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.97 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.97 }}
+                    className="bg-red-500/15 border border-red-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <ShieldAlert className="w-7 h-7 text-red-400 shrink-0 animate-pulse" />
+                      <div>
+                        <div className="font-display text-xl font-bold text-white">
+                          {state.meeting.reason === 'BODY_REPORTED'
+                            ? `Dead Body Reported: ${state.meeting.victimName}`
+                            : `Emergency Meeting Called by ${state.meeting.reporterName}`}
+                        </div>
+                        <div className="text-xs text-red-200 mt-0.5 font-mono tabular-nums">
+                          {state.meeting.verdictMessage
+                            ? state.meeting.verdictMessage
+                            : state.meeting.stage === 'GATHERING'
+                              ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
+                              : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                        </div>
+                      </div>
+                    </div>
+                    {state.meeting.stage === 'GATHERING' && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => callHostApi('start-discussion')}
+                        className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs whitespace-nowrap"
+                      >
+                        Start Discussion Now
+                      </button>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* End Game Banner */}
               {state.phase === 'ENDED' && (
-                <div
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
                   className={`rounded-xl p-4 border ${
                     state.winner === 'CREWMATES'
                       ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
@@ -360,7 +404,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                     {state.winner === 'CREWMATES' ? 'CREWMATES VICTORY' : 'IMPOSTORS VICTORY'}
                   </div>
                   <p className="text-sm mt-1">{state.winReason}</p>
-                </div>
+                </motion.div>
               )}
             </div>
 
@@ -390,11 +434,15 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {state.players.map((p) => {
+                  {state.players.map((p, idx) => {
                     const colorDef = getColorDef(p.color);
                     return (
-                      <div
+                      <motion.div
                         key={p.playerId}
+                        layout
+                        initial={{ opacity: 0, scale: 0.94 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ delay: idx * 0.03 }}
                         className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
                           p.alive
                             ? 'bg-slate-950/60 border-white/10'
@@ -402,7 +450,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <CrewmateAvatar color={p.color} alive={p.alive} size={40} />
+                          <CrewmateAvatar color={p.color} alive={p.alive} animate={p.alive} size={40} />
                           <div className="min-w-0">
                             <div className="font-semibold text-sm text-white truncate">
                               {p.name}
@@ -414,6 +462,11 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                                 {p.alive ? 'Alive' : 'Killed'}
                               </span>
                             </div>
+                            {p.rejoinCode && (
+                              <div className="text-[11px] font-mono text-cyan-300/90 mt-0.5">
+                                Rejoin: {p.rejoinCode}
+                              </div>
+                            )}
                             {p.revealedRole && (
                               <div className="text-[11px] font-mono font-bold text-amber-300 mt-0.5">
                                 {p.revealedRole}
@@ -431,7 +484,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
-                      </div>
+                      </motion.div>
                     );
                   })}
                 </div>
@@ -719,6 +772,26 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
                   value={state.settings.scanCooldownSec}
                   onChange={(e) => updateSettings({ scanCooldownSec: Number(e.target.value) })}
                   className="w-full accent-cyan-400"
+                />
+              </div>
+
+              {/* Sabotage Cooldown */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-white">Sabotage Cooldown</span>
+                  <span className="font-mono text-sm font-bold text-orange-400 tabular-nums">
+                    {state.settings.sabotageCooldownSec ?? 30}s
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={10}
+                  max={90}
+                  step={5}
+                  disabled={state.phase !== 'LOBBY'}
+                  value={state.settings.sabotageCooldownSec ?? 30}
+                  onChange={(e) => updateSettings({ sabotageCooldownSec: Number(e.target.value) })}
+                  className="w-full accent-orange-400"
                 />
               </div>
 

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Collection, Db, MongoClient } from 'mongodb';
 import type {
+  ActiveSabotage,
   AssignedTask,
   GamePhase,
   GameSettings,
@@ -13,6 +14,7 @@ import type {
 export interface StoredPlayer {
   playerId: string;
   playerToken: string;
+  rejoinCode: string;
   name: string;
   color: PlayerColorId;
   secretRole: SecretRole;
@@ -54,6 +56,8 @@ export interface StoredSession {
   phase: GamePhase;
   settings: GameSettings;
   players: StoredPlayer[];
+  activeSabotage: ActiveSabotage | null;
+  lastSabotageAt: number;
   meeting: StoredMeeting | null;
   winner: 'CREWMATES' | 'IMPOSTORS' | null;
   winReason: string | null;

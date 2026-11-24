@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Skeld IRL",
+    "slug": "skeld-irl",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0F17",
+    "android": {
+      "package": "com.skeld.irl",
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0F17"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.skeld.irl",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Skeld IRL to use the rear camera to scan Task, Player Back, Emergency Meeting, and Host Join QR codes."
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Skeld IRL to scan Task, Player, and Emergency Meeting QR codes."
+        }
+      ]
+    ]
+  }
+}

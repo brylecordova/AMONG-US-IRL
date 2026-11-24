@@ -27,15 +27,18 @@ import {
   processPlayerBackScan,
   projectForHost,
   projectForPlayer,
+  rejoinGameSession,
   resetMissionToLobby,
   startMission,
   triggerEmergencyButton,
+  triggerSabotage,
   updateHostPublicUrl,
   updateSessionSettings,
 } from './server/gameEngine.ts';
 import {
   PLAYER_COLORS,
   PlayerColorId,
+  SabotageKind,
   SKELD_TASKS,
   SkeldTaskId,
 } from './src/shared/skeldData.ts';
@@ -145,6 +148,16 @@ async function main() {
   activeProtocol = serverProtocol;
 
   const app = express();
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '64kb' }));
 
   app.get('/api/health', (_req, res) => {
@@ -228,6 +241,25 @@ async function main() {
       });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to join mission.' });
+    }
+  });
+
+  // Rejoin an active or lobby session using unique Lobby-Player Rejoin Code
+  app.post('/api/sessions/:code/rejoin', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      if (!code) return res.status(400).json({ error: 'Invalid session code.' });
+
+      const { rejoinCode } = req.body as { rejoinCode?: unknown };
+      const { session, player } = await rejoinGameSession(code, rejoinCode);
+      await broadcastSessionState(session.sessionCode);
+
+      res.json({
+        playerToken: player.playerToken,
+        state: projectForPlayer(session, player.playerToken),
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to rejoin mission.' });
     }
   });
 
@@ -318,6 +350,25 @@ async function main() {
   });
 
   // Player actions
+  app.post('/api/sessions/:code/sabotage', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      const { kind } = req.body as { kind?: unknown };
+      if (!code || !playerToken || (kind !== 'BLACKOUT' && kind !== 'SIGNAL_JAM')) {
+        return res.status(400).json({ error: 'Invalid sabotage request.' });
+      }
+      const session = await triggerSabotage(code, playerToken, kind as SabotageKind);
+      await broadcastSessionState(code, {
+        type: 'sabotage:alert',
+        payload: { kind },
+      });
+      res.json({ state: projectForPlayer(session, playerToken) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Sabotage rejected.' });
+    }
+  });
+
   app.post('/api/sessions/:code/tasks/complete', async (req, res) => {
     try {
       const code = sanitizeSessionCode(req.params.code);
@@ -326,10 +377,18 @@ async function main() {
       if (!code || !playerToken || typeof taskId !== 'string' || !SKELD_TASKS.some((t) => t.id === taskId)) {
         return res.status(400).json({ error: 'Invalid task submission.' });
       }
-      const { session, wasCrewTask } = await completePlayerTask(code, playerToken, taskId as SkeldTaskId);
-      await broadcastSessionState(code);
+      const { session, wasCrewTask, powerRestored } = await completePlayerTask(
+        code,
+        playerToken,
+        taskId as SkeldTaskId,
+      );
+      await broadcastSessionState(
+        code,
+        powerRestored ? { type: 'sabotage:cleared', payload: { kind: 'BLACKOUT' } } : undefined,
+      );
       res.json({
         wasCrewTask,
+        powerRestored,
         state: projectForPlayer(session, playerToken),
       });
     } catch (err) {
