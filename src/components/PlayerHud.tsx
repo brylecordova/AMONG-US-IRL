@@ -3,12 +3,16 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertTriangle,
   CheckCircle2,
+  CloudRain,
   Eye,
   Lock,
   QrCode,
   Radio,
   ShieldAlert,
+  Skull,
+  Sparkles,
   Terminal,
+  Trophy,
   Unlock,
   Volume2,
   VolumeX,
@@ -28,7 +32,7 @@ import {
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { SkeldTaskIconBadge } from './PrintedQrCards';
-import { QrScannerModal } from './QrScannerModal';
+import { QrScannerModal, QrScanValidationResult } from './QrScannerModal';
 import { RoleSplashModal } from './RoleSplashModal';
 import { SkeldTaskModal } from './tasks/SkeldTaskModal';
 import { soundEngine } from '../utils/sound';
@@ -87,9 +91,11 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [colorBusy, setColorBusy] = useState(false);
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
+  const serverSkewMsRef = useRef(state.serverTime - Date.now());
 
-  // Sync cooldowns from server snapshot and tick every second smoothly
+  // Sync cooldowns & clock offset from server snapshot and tick smoothly
   useEffect(() => {
+    serverSkewMsRef.current = state.serverTime - Date.now();
     setLocalKillRemaining(state.self.killCooldownRemainingSec);
     setLocalScanRemaining(state.self.scanCooldownRemainingSec);
     setLocalSabotageRemaining(state.self.sabotageCooldownRemainingSec ?? 0);
@@ -109,6 +115,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (state.phase !== 'MEETING' || !state.meeting?.revealEndsAt) return;
+    setNowMs(Date.now());
+    const fastTimer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 200);
+    return () => clearInterval(fastTimer);
+  }, [state.phase, state.meeting?.revealEndsAt]);
 
   // Show "YOU HAVE BEEN KILLED" modal immediately when killed
   useEffect(() => {
@@ -177,12 +192,22 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     prevPhaseRef.current = state.phase;
   }, [missionStartedTrigger, state.phase]);
 
-  // Play victory sound when game ends
+  const isImpostorTeam =
+    state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
+  const isInvestigator = state.self.secretRole === 'INVESTIGATOR';
+  const didPlayerWin = state.winner === 'IMPOSTORS' ? isImpostorTeam : !isImpostorTeam;
+  const myColor = getColorDef(state.self.color);
+
+  // Play victory or defeat sound when game ends
   useEffect(() => {
     if (state.phase === 'ENDED') {
-      soundEngine.playVictory();
+      if (didPlayerWin) {
+        soundEngine.playVictory();
+      } else {
+        soundEngine.playDefeat();
+      }
     }
-  }, [state.phase]);
+  }, [state.phase, didPlayerWin]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -195,45 +220,57 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     setMuted(next);
   };
 
-  const isImpostorTeam =
-    state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
-  const isInvestigator = state.self.secretRole === 'INVESTIGATOR';
-  const myColor = getColorDef(state.self.color);
+  const effectiveNowMs = nowMs + serverSkewMsRef.current;
 
   const signalJamLeftSec =
     state.activeSabotage?.kind === 'SIGNAL_JAM' && state.activeSabotage.expiresAt
-      ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - nowMs) / 1000))
+      ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNowMs) / 1000))
       : 0;
 
-  const handleQrDetected = async (parsed: ParsedQrAction) => {
+  const handleQrDetected = async (parsed: ParsedQrAction): Promise<QrScanValidationResult> => {
     const mode = scannerMode || 'AUTO';
-    setScannerMode(null);
+
+    if (parsed.kind === 'JOIN') {
+      return {
+        valid: false,
+        error: 'That is a Join Lobby QR. Scan a Task, Player Back, or Emergency QR.',
+      };
+    }
 
     if (parsed.sessionCode && parsed.sessionCode !== state.sessionCode) {
-      showToast(`That QR code belongs to session ${parsed.sessionCode}, not ${state.sessionCode}.`);
-      return;
+      return {
+        valid: false,
+        error: `That QR code belongs to session ${parsed.sessionCode}, not ${state.sessionCode}.`,
+      };
     }
 
     if (parsed.kind === 'TASK') {
       if (state.activeSabotage?.kind === 'BLACKOUT') {
         const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
         if (parsed.task.id !== 'fix-wiring') {
-          showToast(`Power Blackout active! Scan Fix Wiring${codeHint} to restore power first.`);
-          return;
+          return {
+            valid: false,
+            error: `Power Blackout active! Scan Fix Wiring${codeHint} to restore power first.`,
+          };
         }
         if (!state.self.alive) {
-          showToast(`Power Blackout active! Only alive players can restore Fix Wiring${codeHint}.`);
-          return;
+          return {
+            valid: false,
+            error: `Power Blackout active! Only alive players can restore Fix Wiring${codeHint}.`,
+          };
         }
       }
+      setScannerMode(null);
       setActiveTask(parsed.task);
-      return;
+      return { valid: true };
     }
 
     if (parsed.kind === 'MEETING') {
       if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
-        showToast(`Signal Jam active! Emergency Meetings are disabled for ${signalJamLeftSec}s.`);
-        return;
+        return {
+          valid: false,
+          error: `Signal Jam active! Emergency Meetings are disabled for ${signalJamLeftSec}s.`,
+        };
       }
       try {
         const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/call`, {
@@ -242,11 +279,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        setScannerMode(null);
         onUpdateState(data.state);
+        return { valid: true };
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'Unable to call meeting.');
+        return {
+          valid: false,
+          error: err instanceof Error ? err.message : 'Unable to call meeting.',
+        };
       }
-      return;
     }
 
     if (parsed.kind === 'PLAYER') {
@@ -264,6 +305,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        setScannerMode(null);
         onUpdateState(data.state);
 
         const outcome = data.outcome;
@@ -290,10 +332,16 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             }.`,
           );
         }
+        return { valid: true };
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'Scan action failed.');
+        return {
+          valid: false,
+          error: err instanceof Error ? err.message : 'Scan action failed.',
+        };
       }
     }
+
+    return { valid: false, error: 'Unrecognized QR code.' };
   };
 
   const handleTriggerSabotage = async (kind: SabotageKind) => {
@@ -458,11 +506,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   };
 
   const discussionLeftSec = state.meeting
-    ? Math.max(0, Math.ceil((state.meeting.discussionEndsAt - nowMs) / 1000))
+    ? Math.max(0, Math.ceil((state.meeting.discussionEndsAt - effectiveNowMs) / 1000))
     : 0;
   const votingLeftSec = state.meeting
-    ? Math.max(0, Math.ceil((state.meeting.votingEndsAt - nowMs) / 1000))
+    ? Math.max(0, Math.ceil((state.meeting.votingEndsAt - effectiveNowMs) / 1000))
     : 0;
+  const revealLeftSec =
+    state.meeting?.stage === 'VOTING' && state.meeting.revealEndsAt
+      ? Math.max(0, Math.ceil((state.meeting.revealEndsAt - effectiveNowMs) / 1000))
+      : 0;
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col pb-28">
@@ -870,6 +922,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 <div className="font-mono text-xs text-red-200 tabular-nums pt-1">
                   DISCUSSION PHASE · VOTING OPENS IN {discussionLeftSec}s
                 </div>
+              ) : state.meeting.stage === 'VOTING' && state.meeting.revealEndsAt ? (
+                <div className="font-mono text-xs text-amber-300 font-bold tabular-nums pt-1">
+                  ALL VOTES LOCKED · REVEALING RESULTS IN {revealLeftSec}s
+                </div>
               ) : (
                 <div className="font-mono text-xs text-red-200 tabular-nums pt-1">
                   VOTING OPEN · {votingLeftSec}s REMAINING
@@ -981,6 +1037,33 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   </div>
                 )}
 
+                {/* 3-Second Countdown Banner Once All Votes Are In */}
+                {state.meeting.stage === 'VOTING' && state.meeting.revealEndsAt && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.94 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="rounded-2xl bg-gradient-to-r from-amber-500/20 via-red-500/20 to-amber-500/20 border-2 border-amber-400/80 p-4 text-center shadow-lg space-y-1.5"
+                  >
+                    <div className="text-[11px] font-mono font-bold uppercase tracking-[0.2em] text-amber-300">
+                      All Votes Locked
+                    </div>
+                    <div className="flex items-center justify-center gap-3">
+                      <span className="text-sm font-semibold text-white">
+                        Revealing voting results in
+                      </span>
+                      <motion.span
+                        key={revealLeftSec}
+                        initial={{ scale: 1.45, opacity: 0.4 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+                        className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-amber-400 text-slate-950 font-display text-2xl font-bold tabular-nums shadow"
+                      >
+                        {revealLeftSec}
+                      </motion.span>
+                    </div>
+                  </motion.div>
+                )}
+
                 {state.players.map((p, idx) => {
                   const colorDef = getColorDef(p.color);
                   const canVoteTarget =
@@ -1040,17 +1123,23 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                         </div>
                       </div>
 
-                      {/* Among Us style voter icons shown in Verdict */}
+                      {/* Smaller voter icons shown in real time below target icon during Voting & Verdict */}
                       {votersForPlayer.length > 0 && (
-                        <div className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5">
+                        <div
+                          className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5"
+                          aria-label={`Votes for ${p.name}: ${votersForPlayer.map((v) => v.name).join(', ')}`}
+                        >
                           {votersForPlayer.map((voter) => (
-                            <span
+                            <motion.span
                               key={voter.playerId}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-950/80 border border-white/10 text-[11px] text-slate-200"
+                              initial={{ opacity: 0, scale: 0.6 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                              title={`${voter.name} (${getColorDef(voter.color).label})`}
+                              className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
                             >
-                              <CrewmateAvatar color={voter.color} size={18} />
-                              <span>{voter.name}</span>
-                            </span>
+                              <CrewmateAvatar color={voter.color} size={22} />
+                            </motion.span>
                           ))}
                         </div>
                       )}
@@ -1058,21 +1147,37 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   );
                 })}
 
-                {/* Skip Vote option during VOTING */}
-                {state.meeting.stage === 'VOTING' && state.self.alive && !state.self.hasVoted && (
+                {/* Skip Vote button & real-time skipper icons during VOTING and VERDICT */}
+                {state.meeting.stage === 'VOTING' && state.self.alive && !state.self.hasVoted ? (
                   <motion.button
                     type="button"
                     whileTap={{ scale: 0.98 }}
                     onClick={() => handleCastVote('SKIP')}
-                    className="w-full min-h-[50px] px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-white font-bold text-sm flex items-center justify-between"
+                    className="w-full min-h-[50px] px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-white font-bold text-sm flex flex-col gap-2 text-left"
                   >
-                    <span>Skip Vote</span>
-                    <span className="text-xs font-normal text-slate-300">Do not eject anyone</span>
+                    <div className="w-full flex items-center justify-between">
+                      <span>Skip Vote</span>
+                      <span className="text-xs font-normal text-slate-300">Do not eject anyone</span>
+                    </div>
+                    {(state.meeting.voteBreakdown?.skipped.length || 0) > 0 && (
+                      <div className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5">
+                        {state.meeting.voteBreakdown!.skipped.map((voter) => (
+                          <motion.span
+                            key={voter.playerId}
+                            initial={{ opacity: 0, scale: 0.6 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                            title={`${voter.name} (${getColorDef(voter.color).label})`}
+                            className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
+                          >
+                            <CrewmateAvatar color={voter.color} size={22} />
+                          </motion.span>
+                        ))}
+                      </div>
+                    )}
                   </motion.button>
-                )}
-
-                {/* Skipped Votes reveal row in Verdict */}
-                {state.meeting.voteBreakdown && (
+                ) : (state.meeting.stage === 'VOTING' || state.meeting.stage === 'VERDICT') &&
+                  state.meeting.voteBreakdown ? (
                   <div className="px-4 py-3 rounded-xl bg-[#151C28] border border-white/10 space-y-2">
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-semibold text-slate-300">Skipped Votes</span>
@@ -1083,22 +1188,25 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     {state.meeting.voteBreakdown.skipped.length > 0 ? (
                       <div className="flex items-center flex-wrap gap-1.5">
                         {state.meeting.voteBreakdown.skipped.map((voter) => (
-                          <span
+                          <motion.span
                             key={voter.playerId}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-950/80 border border-white/10 text-[11px] text-slate-200"
+                            initial={{ opacity: 0, scale: 0.6 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                            title={`${voter.name} (${getColorDef(voter.color).label})`}
+                            className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
                           >
-                            <CrewmateAvatar color={voter.color} size={18} />
-                            <span>{voter.name}</span>
-                          </span>
+                            <CrewmateAvatar color={voter.color} size={22} />
+                          </motion.span>
                         ))}
                       </div>
                     ) : (
                       <div className="text-xs text-slate-500">No crewmates skipped.</div>
                     )}
                   </div>
-                )}
+                ) : null}
 
-                {state.meeting.stage === 'VOTING' && state.self.hasVoted && (
+                {state.meeting.stage === 'VOTING' && state.self.hasVoted && !state.meeting.revealEndsAt && (
                   <div className="text-center text-xs font-mono text-emerald-400 py-2">
                     Vote locked. Waiting for remaining alive crewmates...
                   </div>
@@ -1114,7 +1222,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           </motion.div>
         )}
 
-        {/* VICTORY / GAME OVER SCREEN */}
+        {/* VICTORY / GAME OVER SCREEN (FLASHY WIN vs DREARY LOSE BY TEAM) */}
         {state.phase === 'ENDED' && (
           <motion.div
             key="ended"
@@ -1124,20 +1232,195 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
             className="space-y-4 pt-2"
           >
+            {didPlayerWin ? (
+              <div
+                className={`relative overflow-hidden rounded-3xl p-6 sm:p-8 text-center border-2 shadow-2xl ${
+                  state.winner === 'CREWMATES'
+                    ? 'bg-gradient-to-br from-emerald-950/90 via-cyan-950/75 to-amber-950/50 border-amber-300/80 shadow-[0_0_55px_rgba(16,185,129,0.35)]'
+                    : 'bg-gradient-to-br from-red-950/95 via-rose-950/80 to-amber-950/60 border-amber-400/85 shadow-[0_0_55px_rgba(239,68,68,0.4)]'
+                }`}
+              >
+                {/* Sweeping celebratory sheen */}
+                <motion.div
+                  aria-hidden="true"
+                  animate={{ x: ['-130%', '220%'] }}
+                  transition={{ duration: 2.6, repeat: Infinity, repeatDelay: 1.1, ease: 'easeInOut' }}
+                  className="pointer-events-none absolute inset-y-0 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-white/20 to-transparent"
+                />
+
+                {/* Animated confetti sparks */}
+                {[
+                  { left: '10%', top: '14%', color: '#FBBF24', delay: 0 },
+                  { left: '24%', top: '76%', color: '#38BDF8', delay: 0.3 },
+                  { left: '48%', top: '10%', color: '#34D399', delay: 0.6 },
+                  { left: '76%', top: '18%', color: '#F472B6', delay: 0.2 },
+                  { left: '88%', top: '70%', color: '#FBBF24', delay: 0.5 },
+                  { left: '62%', top: '82%', color: '#22D3EE', delay: 0.8 },
+                ].map((spark, idx) => (
+                  <motion.span
+                    key={idx}
+                    aria-hidden="true"
+                    animate={{
+                      y: [0, -14, 0],
+                      scale: [0.85, 1.35, 0.85],
+                      opacity: [0.4, 1, 0.4],
+                      rotate: [0, 180, 360],
+                    }}
+                    transition={{
+                      duration: 2.1 + idx * 0.2,
+                      delay: spark.delay,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                    }}
+                    style={{
+                      left: spark.left,
+                      top: spark.top,
+                      backgroundColor: spark.color,
+                    }}
+                    className="pointer-events-none absolute w-2.5 h-2.5 rounded-sm shadow-[0_0_12px_currentColor]"
+                  />
+                ))}
+
+                <div className="relative z-10 space-y-4">
+                  <motion.div
+                    animate={{ scale: [1, 1.12, 1], rotate: [0, -4, 4, 0] }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                    className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-400/20 border-2 border-amber-300/80 text-amber-300 shadow-[0_0_25px_rgba(251,191,36,0.45)] mx-auto"
+                  >
+                    <Trophy className="w-8 h-8" />
+                  </motion.div>
+
+                  <div>
+                    <div className="inline-flex items-center gap-1.5 font-mono text-xs font-bold uppercase tracking-[0.25em] text-amber-300">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>
+                        {state.winner === 'IMPOSTORS'
+                          ? 'IMPOSTORS PREVAIL'
+                          : isInvestigator
+                            ? 'INVESTIGATOR & CREW VICTORY'
+                            : 'CREWMATES VICTORY'}
+                      </span>
+                      <Sparkles className="w-3.5 h-3.5" />
+                    </div>
+                    <h1
+                      className={`font-display text-6xl font-bold tracking-wider mt-1 drop-shadow-[0_4px_20px_rgba(255,255,255,0.28)] ${
+                        state.winner === 'CREWMATES'
+                          ? 'bg-gradient-to-r from-emerald-200 via-amber-200 to-cyan-200 bg-clip-text text-transparent'
+                          : 'bg-gradient-to-r from-red-200 via-amber-200 to-rose-200 bg-clip-text text-transparent'
+                      }`}
+                    >
+                      VICTORY
+                    </h1>
+                  </div>
+
+                  {/* Celebrating Winning Team Avatars */}
+                  <div className="flex items-center justify-center flex-wrap gap-3 py-1">
+                    {state.players
+                      .filter((p) => {
+                        const pImp =
+                          p.revealedRole === 'IMPOSTOR' || p.revealedRole === 'SHAPESHIFTER';
+                        return state.winner === 'IMPOSTORS' ? pImp : !pImp;
+                      })
+                      .map((winnerPlayer, idx) => (
+                        <motion.div
+                          key={winnerPlayer.playerId}
+                          animate={{ y: [0, -8, 0] }}
+                          transition={{
+                            duration: 1.2,
+                            delay: idx * 0.14,
+                            repeat: Infinity,
+                            ease: 'easeInOut',
+                          }}
+                          className="flex flex-col items-center gap-1"
+                        >
+                          <CrewmateAvatar color={winnerPlayer.color} alive size={46} />
+                          <span className="text-[11px] font-semibold text-white/90 max-w-[68px] truncate">
+                            {winnerPlayer.name}
+                          </span>
+                        </motion.div>
+                      ))}
+                  </div>
+
+                  <p className="text-sm font-medium text-white/90 max-w-md mx-auto">
+                    {state.winReason}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="relative overflow-hidden rounded-3xl p-6 sm:p-8 text-center border border-slate-700/70 bg-gradient-to-b from-[#13161E] via-[#0D0F15] to-[#08090D] shadow-2xl">
+                {/* Dreary falling ash / rain streaks */}
+                {[
+                  { left: '12%', delay: 0, dur: 3.4 },
+                  { left: '28%', delay: 0.9, dur: 4.1 },
+                  { left: '46%', delay: 0.4, dur: 3.7 },
+                  { left: '64%', delay: 1.3, dur: 4.3 },
+                  { left: '82%', delay: 0.7, dur: 3.5 },
+                  { left: '91%', delay: 1.8, dur: 4.0 },
+                ].map((streak, idx) => (
+                  <motion.span
+                    key={idx}
+                    aria-hidden="true"
+                    animate={{ y: [-30, 260], opacity: [0, 0.25, 0] }}
+                    transition={{
+                      duration: streak.dur,
+                      delay: streak.delay,
+                      repeat: Infinity,
+                      ease: 'linear',
+                    }}
+                    style={{ left: streak.left }}
+                    className="pointer-events-none absolute top-0 w-px h-10 bg-gradient-to-b from-transparent via-slate-400/50 to-transparent"
+                  />
+                ))}
+
+                <div className="relative z-10 space-y-4">
+                  <div className="inline-flex items-center gap-2 text-slate-500 font-mono text-xs uppercase tracking-[0.24em]">
+                    <CloudRain className="w-4 h-4 text-slate-500" />
+                    <span>
+                      {state.winner === 'IMPOSTORS'
+                        ? isInvestigator
+                          ? 'INVESTIGATOR & CREW DEFEATED'
+                          : 'CREWMATES DEFEATED'
+                        : 'IMPOSTORS DEFEATED'}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="relative grayscale-[45%] brightness-75 opacity-80">
+                      <CrewmateAvatar
+                        color={state.self.color}
+                        alive={false}
+                        ghost
+                        size={74}
+                      />
+                    </div>
+                    <h1 className="font-display text-6xl font-bold tracking-widest text-slate-400/90">
+                      DEFEAT
+                    </h1>
+                  </div>
+
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/40 border border-slate-800 text-xs font-mono text-red-400/80">
+                    <Skull className="w-3.5 h-3.5" />
+                    <span>
+                      {state.winner === 'IMPOSTORS'
+                        ? 'IMPOSTORS TOOK CONTROL OF THE SKELD'
+                        : 'CREWMATES OUTLASTED THE SABOTAGE'}
+                    </span>
+                  </div>
+
+                  <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+                    {state.winReason}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div
-              className={`rounded-2xl p-6 text-center border-2 ${
-                state.winner === 'CREWMATES'
-                  ? 'bg-emerald-950/35 border-emerald-400'
-                  : 'bg-red-950/35 border-red-500'
+              className={`rounded-2xl p-4 space-y-2.5 border ${
+                didPlayerWin
+                  ? 'bg-[#151C28] border-white/15'
+                  : 'bg-[#0F1218] border-slate-800/80 opacity-85'
               }`}
             >
-              <h1 className="font-display text-4xl font-bold text-white">
-                {state.winner === 'CREWMATES' ? 'CREWMATES WIN' : 'IMPOSTORS WIN'}
-              </h1>
-              <p className="text-sm text-slate-200 mt-2">{state.winReason}</p>
-            </div>
-
-            <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-2.5">
               <div className="text-xs font-semibold text-slate-400">Final Crew Debrief</div>
               {state.players.map((p, idx) => (
                 <motion.div
@@ -1145,10 +1428,16 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.04 }}
-                  className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-white/5"
+                  className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                    didPlayerWin
+                      ? 'bg-slate-950/60 border-white/5'
+                      : 'bg-black/40 border-slate-800/70'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
-                    <CrewmateAvatar color={p.color} alive={p.alive} size={32} />
+                    <div className={didPlayerWin ? '' : 'grayscale-[30%] opacity-80'}>
+                      <CrewmateAvatar color={p.color} alive={p.alive} size={32} />
+                    </div>
                     <div>
                       <div className="text-sm font-semibold text-white">{p.name}</div>
                       <div className="text-xs text-slate-400">{getColorDef(p.color).label}</div>
@@ -1157,10 +1446,16 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   <span
                     className={`font-mono text-xs font-bold ${
                       p.revealedRole === 'IMPOSTOR' || p.revealedRole === 'SHAPESHIFTER'
-                        ? 'text-red-400'
+                        ? didPlayerWin
+                          ? 'text-red-400'
+                          : 'text-red-400/75'
                         : p.revealedRole === 'INVESTIGATOR'
-                          ? 'text-cyan-300'
-                          : 'text-emerald-400'
+                          ? didPlayerWin
+                            ? 'text-cyan-300'
+                            : 'text-cyan-400/70'
+                          : didPlayerWin
+                            ? 'text-emerald-400'
+                            : 'text-slate-400'
                     }`}
                   >
                     {p.revealedRole}
@@ -1455,6 +1750,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             isBlackoutRepair={
               activeTask.id === 'fix-wiring' && state.activeSabotage?.kind === 'BLACKOUT'
             }
+            isImpostor={isImpostorTeam}
             onComplete={handleTaskComplete}
             onClose={() => setActiveTask(null)}
           />

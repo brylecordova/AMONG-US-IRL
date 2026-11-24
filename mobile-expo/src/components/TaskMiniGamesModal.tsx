@@ -12,6 +12,7 @@ import { SkeldTaskDef } from '../skeldShared';
 interface TaskMiniGamesModalProps {
   task: SkeldTaskDef | null;
   isBlackoutRepair?: boolean;
+  isImpostor?: boolean;
   onComplete: () => void;
   onClose: () => void;
 }
@@ -19,6 +20,7 @@ interface TaskMiniGamesModalProps {
 export const TaskMiniGamesModal: React.FC<TaskMiniGamesModalProps> = ({
   task,
   isBlackoutRepair = false,
+  isImpostor = false,
   onComplete,
   onClose,
 }) => {
@@ -50,7 +52,7 @@ export const TaskMiniGamesModal: React.FC<TaskMiniGamesModalProps> = ({
       case 'fuel-engines':
         return <FuelEnginesGame onDone={onComplete} />;
       case 'medbay-scan':
-        return <MedbayScanGame onDone={onComplete} />;
+        return <MedbayScanGame onDone={onComplete} isImpostor={isImpostor} />;
       case 'inspect-sample':
         return <InspectSampleGame onDone={onComplete} />;
       case 'prime-shields':
@@ -477,48 +479,159 @@ const FuelEnginesGame: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 };
 
 /* 6. MedBay Scan — Biometric Chamber + Progressive Readouts */
-const MedbayScanGame: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+const MedbayScanGame: React.FC<{ onDone: () => void; isImpostor?: boolean }> = ({
+  onDone,
+  isImpostor = false,
+}) => {
   const [pct, setPct] = useState(0);
   const [scanning, setScanning] = useState(false);
+  const [scanPhase, setScanPhase] = useState<'IDLE' | 'SCANNING' | 'PASS' | 'WARNING'>('IDLE');
+  const [blinkOn, setBlinkOn] = useState(true);
 
   useEffect(() => {
-    if (!scanning) return;
+    if (!scanning || scanPhase !== 'SCANNING') return;
+    let finishTimer: ReturnType<typeof setTimeout> | null = null;
     const iv = setInterval(() => {
       setPct((p) => {
         const next = Math.min(100, p + 8);
         if (next >= 100) {
           clearInterval(iv);
-          setTimeout(onDone, 300);
+          if (isImpostor) {
+            setScanPhase('WARNING');
+            // 2 additional seconds compared to 300ms normal crewmate completion
+            finishTimer = setTimeout(onDone, 2300);
+          } else {
+            setScanPhase('PASS');
+            finishTimer = setTimeout(onDone, 300);
+          }
         }
         return next;
       });
     }, 200);
-    return () => clearInterval(iv);
-  }, [scanning, onDone]);
+    return () => {
+      clearInterval(iv);
+      if (finishTimer) clearTimeout(finishTimer);
+    };
+  }, [scanning, scanPhase, isImpostor, onDone]);
+
+  useEffect(() => {
+    if (scanPhase !== 'WARNING') return;
+    setBlinkOn(true);
+    const blinkIv = setInterval(() => setBlinkOn((b) => !b), 180);
+    return () => clearInterval(blinkIv);
+  }, [scanPhase]);
+
+  const isWarning = scanPhase === 'WARNING';
+  const warningFlash = isWarning && blinkOn;
 
   return (
     <View style={{ alignItems: 'center' }}>
-      <View style={styles.scanChamber}>
-        <View style={styles.crewSilhouette}>
-          <View style={styles.crewVisor} />
+      <View
+        style={[
+          styles.scanChamber,
+          isWarning
+            ? {
+                backgroundColor: warningFlash ? '#2A060B' : '#120306',
+                borderColor: warningFlash ? '#EF4444' : '#7F1D1D',
+                borderWidth: 2,
+              }
+            : null,
+        ]}
+      >
+        {isWarning ? (
+          <Text
+            style={{
+              position: 'absolute',
+              top: 6,
+              color: warningFlash ? '#FFFFFF' : '#FCA5A5',
+              backgroundColor: warningFlash ? '#DC2626' : '#450A0A',
+              fontSize: 10,
+              fontWeight: '900',
+              paddingHorizontal: 8,
+              paddingVertical: 2,
+              borderRadius: 4,
+              letterSpacing: 1,
+            }}
+          >
+            ⚠ WARNING: RED X-RAY ANOMALY
+          </Text>
+        ) : null}
+        <View
+          style={[
+            styles.crewSilhouette,
+            isWarning
+              ? {
+                  backgroundColor: warningFlash ? '#7F1D1D' : '#450A0A',
+                  borderColor: warningFlash ? '#FCA5A5' : '#EF4444',
+                }
+              : null,
+          ]}
+        >
+          <View
+            style={[
+              styles.crewVisor,
+              isWarning ? { backgroundColor: warningFlash ? '#EF4444' : '#991B1B' } : null,
+            ]}
+          />
         </View>
-        {scanning ? <View style={[styles.scanLaser, { top: `${pct}%` }]} /> : null}
+        {scanning ? (
+          <View
+            style={[
+              styles.scanLaser,
+              {
+                top: isWarning ? '50%' : `${pct}%`,
+                backgroundColor: isWarning ? (warningFlash ? '#EF4444' : '#7F1D1D') : '#34D399',
+              },
+            ]}
+          />
+        ) : null}
       </View>
-      <View style={styles.bioReadout}>
-        <Text style={styles.bioText}>HT: {pct >= 25 ? "3'6\"" : '---'}</Text>
-        <Text style={styles.bioText}>WT: {pct >= 50 ? '92 LBS' : '---'}</Text>
-        <Text style={styles.bioText}>BLOOD: {pct >= 75 ? 'O-' : '---'}</Text>
-        <Text style={[styles.bioText, { color: '#4ADE80' }]}>{pct}%</Text>
+      <View
+        style={[
+          styles.bioReadout,
+          isWarning
+            ? { backgroundColor: '#190508', borderWidth: 1, borderColor: '#EF4444' }
+            : null,
+        ]}
+      >
+        <Text style={[styles.bioText, isWarning ? { color: '#FECACA' } : null]}>
+          HT: {pct >= 25 ? "3'6\"" : '---'}
+        </Text>
+        <Text style={[styles.bioText, isWarning ? { color: '#FECACA' } : null]}>
+          WT: {pct >= 50 ? '92 LBS' : '---'}
+        </Text>
+        <Text style={[styles.bioText, isWarning ? { color: '#F87171' } : null]}>
+          BLOOD: {isWarning ? '???' : pct >= 75 ? 'O-' : '---'}
+        </Text>
+        <Text style={[styles.bioText, { color: isWarning ? '#EF4444' : '#4ADE80' }]}>
+          {isWarning ? 'ANOMALY!' : `${pct}%`}
+        </Text>
       </View>
       <TouchableOpacity
         disabled={scanning}
         style={[
           styles.primaryBtn,
-          { marginTop: 14, width: '100%', backgroundColor: '#22C55E', opacity: scanning ? 0.65 : 1 },
+          {
+            marginTop: 14,
+            width: '100%',
+            backgroundColor: isWarning ? (warningFlash ? '#EF4444' : '#7F1D1D') : '#22C55E',
+            opacity: scanning && !isWarning ? 0.65 : 1,
+          },
         ]}
-        onPress={() => setScanning(true)}
+        onPress={() => {
+          setScanning(true);
+          setScanPhase('SCANNING');
+        }}
       >
-        <Text style={styles.primaryBtnText}>{scanning ? 'Scanning Biometrics...' : 'Step on MedBay Pad & Scan'}</Text>
+        <Text style={[styles.primaryBtnText, isWarning ? { color: '#FFFFFF' } : null]}>
+          {isWarning
+            ? '⚠ WARNING: NON-CREW BIOMETRICS'
+            : scanPhase === 'PASS'
+              ? 'Biometrics Verified'
+              : scanning
+                ? 'Scanning Biometrics...'
+                : 'Step on MedBay Pad & Scan'}
+        </Text>
       </TouchableOpacity>
     </View>
   );

@@ -121,7 +121,7 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
   const stage = meeting.stage || 'DISCUSSION';
 
   let voteBreakdown: MeetingVoteReveal | undefined;
-  if (stage === 'VERDICT') {
+  if (stage === 'VOTING' || stage === 'VERDICT') {
     const byTarget: Record<string, MeetingVoterBadge[]> = {};
     const skipped: MeetingVoterBadge[] = [];
     for (const [voterId, targetId] of Object.entries(meeting.votes)) {
@@ -154,6 +154,7 @@ function projectMeeting(session: StoredSession, meeting: StoredMeeting | null): 
     startedAt: meeting.startedAt,
     discussionEndsAt: meeting.discussionEndsAt,
     votingEndsAt: meeting.votingEndsAt,
+    ...(meeting.revealEndsAt ? { revealEndsAt: meeting.revealEndsAt } : {}),
     verdictEndsAt: meeting.verdictEndsAt,
     arrivedCount,
     voteNowCount,
@@ -1033,6 +1034,7 @@ function finalizeMeetingVotes(session: StoredSession): void {
   const meeting = session.meeting;
   if (!meeting || meeting.verdictEndsAt) return;
 
+  delete meeting.revealEndsAt;
   meeting.stage = 'VERDICT';
 
   const tally = new Map<string, number>();
@@ -1112,6 +1114,9 @@ export async function castMeetingVote(
   if (session.meeting.verdictEndsAt) {
     throw new Error('Voting has already concluded.');
   }
+  if (session.meeting.revealEndsAt) {
+    throw new Error('All votes are locked. Revealing results...');
+  }
 
   const now = Date.now();
   if (session.meeting.stage === 'DISCUSSION' && now < session.meeting.discussionEndsAt) {
@@ -1135,7 +1140,8 @@ export async function castMeetingVote(
 
   const aliveCount = session.players.filter((p) => p.alive).length;
   if (Object.keys(session.meeting.votes).length >= aliveCount) {
-    finalizeMeetingVotes(session);
+    session.meeting.revealEndsAt = now + 3000;
+    session.meeting.votingEndsAt = session.meeting.revealEndsAt;
   }
 
   await saveSession(session);
@@ -1174,7 +1180,8 @@ export async function advanceSessionTimers(sessionCode: string): Promise<boolean
     changed = true;
   }
 
-  if (!session.meeting.verdictEndsAt && now >= session.meeting.votingEndsAt) {
+  const voteDeadline = session.meeting.revealEndsAt ?? session.meeting.votingEndsAt;
+  if (!session.meeting.verdictEndsAt && now >= voteDeadline) {
     finalizeMeetingVotes(session);
     changed = true;
   } else if (session.meeting.verdictEndsAt && now >= session.meeting.verdictEndsAt) {

@@ -12,12 +12,20 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ParsedQrAction, parseQrOrManualInput } from '../skeldShared';
 
+export interface NativeQrValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
 interface NativeQrScannerModalProps {
   visible: boolean;
   title?: string;
   subtitle?: string;
   hideManualCodes?: boolean;
-  onDetected: (parsed: ParsedQrAction, raw: string) => void;
+  onDetected: (
+    parsed: ParsedQrAction,
+    raw: string,
+  ) => Promise<NativeQrValidationResult | void> | NativeQrValidationResult | void;
   onClose: () => void;
 }
 
@@ -35,6 +43,8 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
   const [manualInput, setManualInput] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const scanLockRef = useRef(false);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const laserAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -69,6 +79,27 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
     return () => sweep.stop();
   }, [visible, permission, requestPermission, laserAnim]);
 
+  const submitParsed = async (parsed: ParsedQrAction, raw: string, fromCamera: boolean) => {
+    if (scanLockRef.current) return;
+    scanLockRef.current = true;
+    try {
+      const result = await onDetected(parsed, raw);
+      if (!visibleRef.current) return;
+      if (result && result.valid === false) {
+        setErrorMsg(result.error || 'QR code not valid right now. Keep scanning.');
+        setTimeout(() => {
+          scanLockRef.current = false;
+        }, fromCamera ? 1200 : 250);
+      }
+    } catch (err) {
+      if (!visibleRef.current) return;
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to process QR code.');
+      setTimeout(() => {
+        scanLockRef.current = false;
+      }, fromCamera ? 1200 : 250);
+    }
+  };
+
   const handleBarcodeScanned = ({ data }: { data: string }) => {
     if (scanLockRef.current) return;
     const parsed = parseQrOrManualInput(data);
@@ -76,8 +107,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
       setErrorMsg(`Unrecognized QR code: ${data.slice(0, 36)}`);
       return;
     }
-    scanLockRef.current = true;
-    onDetected(parsed, data);
+    void submitParsed(parsed, data, true);
   };
 
   const handleManualSubmit = () => {
@@ -86,7 +116,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
       setErrorMsg('Enter a valid station code (e.g. WIR1, RED, EMRG) or Join URL.');
       return;
     }
-    onDetected(parsed, manualInput.trim());
+    void submitParsed(parsed, manualInput.trim(), false);
   };
 
   const laserTranslateY = laserAnim.interpolate({

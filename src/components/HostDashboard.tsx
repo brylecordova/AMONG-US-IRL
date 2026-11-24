@@ -578,7 +578,9 @@ ${compiledCss}
                                 ? `Gathering at Table (HERE!): ${state.meeting.arrivedCount} / ${state.meeting.totalAliveCount} Alive`
                                 : state.meeting.stage === 'DISCUSSION'
                                   ? `Discussion · Vote Now Agreed: ${state.meeting.voteNowCount} / ${state.meeting.totalAliveCount}`
-                                  : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
+                                  : state.meeting.revealEndsAt
+                                    ? `All Votes Locked (${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}) · Revealing Results...`
+                                    : `Votes Cast: ${state.meeting.votesCastCount} / ${state.meeting.totalAliveCount}`}
                           </div>
                         </div>
                       </div>

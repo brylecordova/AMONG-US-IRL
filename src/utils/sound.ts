@@ -182,6 +182,45 @@ class SoundEngine {
       osc.stop(t + 0.46);
     });
   }
+
+  public playDefeat(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const notes = [293.66, 261.63, 220.0, 174.61];
+    notes.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + idx * 0.22;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t);
+      osc.frequency.linearRampToValueAtTime(f * 0.96, t + 0.42);
+      gain.gain.setValueAtTime(0.12, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.46);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.48);
+    });
+  }
+
+  public playScanWarning(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    for (let i = 0; i < 4; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + i * 0.48;
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(760, t);
+      osc.frequency.setValueAtTime(520, t + 0.16);
+      gain.gain.setValueAtTime(0.11, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.36);
+    }
+  }
 }
 
 export const soundEngine = new SoundEngine();

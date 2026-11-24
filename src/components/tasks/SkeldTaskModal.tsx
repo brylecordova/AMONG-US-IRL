@@ -30,6 +30,7 @@ import {
 interface SkeldTaskModalProps {
   task: SkeldTaskDef;
   isBlackoutRepair?: boolean;
+  isImpostor?: boolean;
   onComplete: () => void;
   onClose: () => void;
 }
@@ -37,6 +38,7 @@ interface SkeldTaskModalProps {
 export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   task,
   isBlackoutRepair = false,
+  isImpostor = false,
   onComplete,
   onClose,
 }) => {
@@ -53,7 +55,7 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
       case 'fuel-engines':
         return <FuelEnginesTask onComplete={onComplete} />;
       case 'medbay-scan':
-        return <MedBayScanTask onComplete={onComplete} />;
+        return <MedBayScanTask onComplete={onComplete} isImpostor={isImpostor} />;
       case 'inspect-sample':
         return <InspectSampleTask onComplete={onComplete} />;
       case 'prime-shields':

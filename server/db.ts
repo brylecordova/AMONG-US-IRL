@@ -37,6 +37,7 @@ export interface StoredMeeting {
   startedAt: number;
   discussionEndsAt: number;
   votingEndsAt: number;
+  revealEndsAt?: number;
   verdictEndsAt?: number;
   arrivedPlayerIds: string[];
   voteNowPlayerIds?: string[];

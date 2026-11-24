@@ -80,10 +80,12 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
+  const serverSkewMsRef = useRef(state.serverTime - Date.now());
   const progressAnim = useRef(new Animated.Value(state.taskProgress.percentage)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    serverSkewMsRef.current = state.serverTime - Date.now();
     setLocalKillRemaining(state.self.killCooldownRemainingSec);
     setLocalScanRemaining(state.self.scanCooldownRemainingSec);
     setLocalSabotageRemaining(state.self.sabotageCooldownRemainingSec ?? 0);
@@ -112,6 +114,15 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
     }, 1000);
     return () => clearInterval(iv);
   }, []);
+
+  useEffect(() => {
+    if (state.phase !== 'MEETING' || !state.meeting?.revealEndsAt) return;
+    setNowMs(Date.now());
+    const fastIv = setInterval(() => {
+      setNowMs(Date.now());
+    }, 200);
+    return () => clearInterval(fastIv);
+  }, [state.phase, state.meeting?.revealEndsAt]);
 
   useEffect(() => {
     const loop = Animated.loop(
@@ -195,6 +206,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   const isImpostorTeam =
     state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
   const isInvestigator = state.self.secretRole === 'INVESTIGATOR';
+  const didPlayerWin = state.winner === 'IMPOSTORS' ? isImpostorTeam : !isImpostorTeam;
   const myColor = getColorDef(state.self.color);
 
   const signalJamLeftSec =
@@ -203,33 +215,47 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       : 0;
 
   const handleQrDetected = async (parsed: ParsedQrAction) => {
-    setShowScanner(false);
+    if (parsed.kind === 'JOIN') {
+      return {
+        valid: false,
+        error: 'That is a Join Lobby QR. Scan a Task, Player Back, or Emergency QR.',
+      };
+    }
 
     if (parsed.sessionCode && parsed.sessionCode !== state.sessionCode) {
-      showToast(`That QR code belongs to ${parsed.sessionCode}, not ${state.sessionCode}.`);
-      return;
+      return {
+        valid: false,
+        error: `That QR code belongs to ${parsed.sessionCode}, not ${state.sessionCode}.`,
+      };
     }
 
     if (parsed.kind === 'TASK') {
       if (state.activeSabotage?.kind === 'BLACKOUT') {
         const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
         if (parsed.task.id !== 'fix-wiring') {
-          showToast(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
-          return;
+          return {
+            valid: false,
+            error: `Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`,
+          };
         }
         if (!state.self.alive) {
-          showToast(`Only alive crewmates can repair Fix Wiring${codeHint} during a Blackout.`);
-          return;
+          return {
+            valid: false,
+            error: `Only alive crewmates can repair Fix Wiring${codeHint} during a Blackout.`,
+          };
         }
       }
+      setShowScanner(false);
       setActiveTask(parsed.task);
-      return;
+      return { valid: true };
     }
 
     if (parsed.kind === 'MEETING') {
       if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
-        showToast(`Signal Jam active! Meetings disabled for ${signalJamLeftSec}s.`);
-        return;
+        return {
+          valid: false,
+          error: `Signal Jam active! Meetings disabled for ${signalJamLeftSec}s.`,
+        };
       }
       try {
         const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/call`, {
@@ -238,11 +264,15 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        setShowScanner(false);
         onUpdateState(data.state);
+        return { valid: true };
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'Unable to call meeting.');
+        return {
+          valid: false,
+          error: err instanceof Error ? err.message : 'Unable to call meeting.',
+        };
       }
-      return;
     }
 
     if (parsed.kind === 'PLAYER') {
@@ -257,6 +287,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        setShowScanner(false);
         onUpdateState(data.state);
 
         const outcome = data.outcome;
@@ -279,10 +310,16 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
             `${outcome.targetName} — Suit: ${getColorDef(outcome.targetColor).label} (${outcome.alive ? 'Alive' : 'Dead'})`,
           );
         }
+        return { valid: true };
       } catch (err) {
-        showToast(err instanceof Error ? err.message : 'Scan rejected.');
+        return {
+          valid: false,
+          error: err instanceof Error ? err.message : 'Scan rejected.',
+        };
       }
     }
+
+    return { valid: false, error: 'Unrecognized QR code.' };
   };
 
   const handleTaskCompleted = async () => {
@@ -440,11 +477,18 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
     outputRange: ['0%', '100%'],
   });
 
+  const effectiveNowMs = nowMs + serverSkewMsRef.current;
+
+  const revealLeftSec =
+    state.meeting?.stage === 'VOTING' && state.meeting.revealEndsAt
+      ? Math.max(0, Math.ceil((state.meeting.revealEndsAt - effectiveNowMs) / 1000))
+      : 0;
+
   const meetingSecLeft = state.meeting
     ? state.meeting.stage === 'DISCUSSION'
-      ? Math.max(0, Math.ceil((state.meeting.discussionEndsAt - nowMs) / 1000))
+      ? Math.max(0, Math.ceil((state.meeting.discussionEndsAt - effectiveNowMs) / 1000))
       : state.meeting.stage === 'VOTING'
-        ? Math.max(0, Math.ceil((state.meeting.votingEndsAt - nowMs) / 1000))
+        ? Math.max(0, Math.ceil((state.meeting.votingEndsAt - effectiveNowMs) / 1000))
         : 0
     : 0;
 
@@ -684,7 +728,9 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 : state.meeting.stage === 'DISCUSSION'
                   ? `Discussion (${meetingSecLeft}s)`
                   : state.meeting.stage === 'VOTING'
-                    ? `Cast Vote (${meetingSecLeft}s)`
+                    ? state.meeting.revealEndsAt
+                      ? `Revealing Results (${revealLeftSec}s)`
+                      : `Cast Vote (${meetingSecLeft}s)`
                     : 'Ejection Verdict'}
             </Text>
 
@@ -735,37 +781,82 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
               </View>
             ) : null}
 
-            {state.meeting.stage === 'VOTING' && state.self.alive ? (
+            {state.meeting.stage === 'VOTING' ? (
               <View style={{ gap: 8, marginTop: 14 }}>
+                {state.meeting.revealEndsAt ? (
+                  <Animated.View style={[styles.revealCountdownBox, { transform: [{ scale: pulseAnim }] }]}>
+                    <Text style={styles.revealCountdownKicker}>ALL VOTES LOCKED</Text>
+                    <Text style={styles.revealCountdownText}>
+                      Revealing results in {revealLeftSec}s...
+                    </Text>
+                  </Animated.View>
+                ) : null}
                 {state.players
                   .filter((p) => p.alive)
-                  .map((p) => (
-                    <TouchableOpacity
-                      key={p.playerId}
-                      disabled={state.self.hasVoted}
-                      style={[
-                        styles.voteRow,
-                        { opacity: state.self.hasVoted ? 0.55 : 1 },
-                      ]}
-                      onPress={() => handleVote(p.playerId)}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <AnimatedCrewmate color={p.color} size={32} />
-                        <Text style={styles.taskName}>{p.name}</Text>
-                      </View>
-                      <Text style={{ color: '#EF4444', fontWeight: '900', fontSize: 12 }}>
-                        {state.self.hasVoted ? (p.hasVoted ? 'VOTED' : 'LOCKED') : 'VOTE'}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                  .map((p) => {
+                    const votersForPlayer = state.meeting?.voteBreakdown?.byTarget[p.playerId] || [];
+                    const canTap = state.self.alive && !state.self.hasVoted;
+                    return (
+                      <TouchableOpacity
+                        key={p.playerId}
+                        disabled={!canTap}
+                        style={[
+                          styles.voteRow,
+                          { flexDirection: 'column', alignItems: 'stretch', opacity: canTap ? 1 : 0.78 },
+                        ]}
+                        onPress={() => handleVote(p.playerId)}
+                      >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <AnimatedCrewmate color={p.color} size={32} />
+                            <Text style={styles.taskName}>{p.name}</Text>
+                          </View>
+                          <Text style={{ color: p.hasVoted ? '#4ADE80' : '#EF4444', fontWeight: '900', fontSize: 12 }}>
+                            {p.hasVoted ? 'VOTED' : canTap ? 'VOTE' : 'OPEN'}
+                          </Text>
+                        </View>
+                        {votersForPlayer.length > 0 ? (
+                          <View style={styles.voterIconsStrip}>
+                            {votersForPlayer.map((v) => (
+                              <View key={v.playerId} style={styles.voterIconChip}>
+                                <AnimatedCrewmate color={v.color} size={20} />
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
                 <TouchableOpacity
-                  disabled={state.self.hasVoted}
-                  style={[styles.skipBtn, { opacity: state.self.hasVoted ? 0.5 : 1 }]}
+                  disabled={!state.self.alive || state.self.hasVoted}
+                  style={[
+                    styles.skipBtn,
+                    {
+                      height: undefined,
+                      minHeight: 46,
+                      paddingVertical: 10,
+                      paddingHorizontal: 14,
+                      opacity: state.self.alive && !state.self.hasVoted ? 1 : 0.75,
+                    },
+                  ]}
                   onPress={() => handleVote('SKIP')}
                 >
                   <Text style={styles.skipBtnText}>
-                    {state.self.hasVoted ? 'Vote Recorded' : 'Skip Vote'}
+                    {!state.self.alive
+                      ? 'Skipped Votes'
+                      : state.self.hasVoted
+                        ? 'Skip Vote (Vote Recorded)'
+                        : 'Skip Vote'}
                   </Text>
+                  {(state.meeting.voteBreakdown?.skipped.length || 0) > 0 ? (
+                    <View style={[styles.voterIconsStrip, { width: '100%', justifyContent: 'center' }]}>
+                      {state.meeting.voteBreakdown!.skipped.map((v) => (
+                        <View key={v.playerId} style={styles.voterIconChip}>
+                          <AnimatedCrewmate color={v.color} size={20} />
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
                 </TouchableOpacity>
               </View>
             ) : null}
@@ -832,20 +923,99 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
           </View>
         ) : null}
 
-        {/* ENDED PHASE */}
+        {/* ENDED PHASE (FLASHY WIN vs DREARY LOSE BY TEAM) */}
         {state.phase === 'ENDED' ? (
-          <View style={styles.panel}>
-            <Text style={[styles.kicker, { color: state.winner === 'CREWMATES' ? '#38BDF8' : '#EF4444' }]}>
-              MISSION COMPLETE
-            </Text>
-            <Text style={styles.panelTitle}>
-              {state.winner === 'CREWMATES' ? 'CREWMATES VICTORY' : 'IMPOSTORS VICTORY'}
-            </Text>
-            <Text style={styles.panelSub}>{state.winReason}</Text>
+          <View
+            style={[
+              styles.panel,
+              didPlayerWin
+                ? {
+                    backgroundColor: state.winner === 'CREWMATES' ? '#07221E' : '#260911',
+                    borderColor: '#FBBF24',
+                    borderWidth: 2,
+                  }
+                : {
+                    backgroundColor: '#0A0C11',
+                    borderColor: '#334155',
+                    borderWidth: 1,
+                  },
+            ]}
+          >
+            {didPlayerWin ? (
+              <View style={{ alignItems: 'center', marginBottom: 8 }}>
+                <Text style={[styles.kicker, { color: '#FBBF24', letterSpacing: 2 }]}>
+                  ★ {state.winner === 'IMPOSTORS' ? 'IMPOSTORS PREVAIL' : isInvestigator ? 'INVESTIGATOR & CREW VICTORY' : 'CREWMATES VICTORY'} ★
+                </Text>
+                <Animated.View style={{ transform: [{ scale: pulseAnim }], marginVertical: 10 }}>
+                  <Text
+                    style={{
+                      fontSize: 40,
+                      fontWeight: '900',
+                      letterSpacing: 3,
+                      color: state.winner === 'CREWMATES' ? '#6EE7B7' : '#FCA5A5',
+                      textShadowColor: '#FBBF24',
+                      textShadowOffset: { width: 0, height: 0 },
+                      textShadowRadius: 12,
+                    }}
+                  >
+                    VICTORY
+                  </Text>
+                </Animated.View>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, marginBottom: 10 }}>
+                  {state.players
+                    .filter((p) => {
+                      const pImp = p.revealedRole === 'IMPOSTOR' || p.revealedRole === 'SHAPESHIFTER';
+                      return state.winner === 'IMPOSTORS' ? pImp : !pImp;
+                    })
+                    .map((w) => (
+                      <View key={w.playerId} style={{ alignItems: 'center', gap: 4 }}>
+                        <AnimatedCrewmate color={w.color} alive size={40} animate />
+                        <Text style={{ color: '#F8FAFC', fontSize: 11, fontWeight: '700' }}>{w.name}</Text>
+                      </View>
+                    ))}
+                </View>
+                <Text style={[styles.panelSub, { color: '#E2E8F0', textAlign: 'center' }]}>
+                  {state.winReason}
+                </Text>
+              </View>
+            ) : (
+              <View style={{ alignItems: 'center', marginBottom: 8 }}>
+                <Text style={[styles.kicker, { color: '#64748B', letterSpacing: 2 }]}>
+                  {state.winner === 'IMPOSTORS'
+                    ? isInvestigator
+                      ? 'INVESTIGATOR & CREW DEFEATED'
+                      : 'CREWMATES DEFEATED'
+                    : 'IMPOSTORS DEFEATED'}
+                </Text>
+                <View style={{ marginVertical: 12, opacity: 0.72, alignItems: 'center' }}>
+                  <AnimatedCrewmate color={state.self.color} alive={false} size={58} />
+                  <Text
+                    style={{
+                      fontSize: 38,
+                      fontWeight: '900',
+                      letterSpacing: 4,
+                      color: '#94A3B8',
+                      marginTop: 8,
+                    }}
+                  >
+                    DEFEAT
+                  </Text>
+                </View>
+                <Text style={[styles.panelSub, { color: '#94A3B8', textAlign: 'center' }]}>
+                  {state.winReason}
+                </Text>
+              </View>
+            )}
 
-            <View style={{ gap: 8, marginTop: 16 }}>
+            <View style={{ gap: 8, marginTop: 14, opacity: didPlayerWin ? 1 : 0.78 }}>
               {state.players.map((p) => (
-                <View key={p.playerId} style={styles.taskRow}>
+                <View
+                  key={p.playerId}
+                  style={[
+                    styles.taskRow,
+                    !didPlayerWin ? { backgroundColor: '#07090D', borderColor: '#1E293B' } : null,
+                  ]}
+                >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                     <AnimatedCrewmate color={p.color} alive={p.alive} size={30} />
                     <Text style={styles.taskName}>{p.name}</Text>
@@ -1041,6 +1211,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         isBlackoutRepair={
           Boolean(activeTask && activeTask.id === 'fix-wiring' && state.activeSabotage?.kind === 'BLACKOUT')
         }
+        isImpostor={isImpostorTeam}
         onComplete={handleTaskCompleted}
         onClose={() => setActiveTask(null)}
       />
@@ -1435,6 +1606,43 @@ const styles = StyleSheet.create({
     color: '#E2E8F0',
     fontWeight: '800',
     fontSize: 14,
+  },
+  voterIconsStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
+  },
+  voterIconChip: {
+    padding: 3,
+    borderRadius: 999,
+    backgroundColor: '#131A26',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  revealCountdownBox: {
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    borderWidth: 2,
+    borderColor: '#FBBF24',
+    alignItems: 'center',
+  },
+  revealCountdownKicker: {
+    color: '#FDE68A',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+  revealCountdownText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 2,
   },
   verdictBox: {
     marginTop: 14,

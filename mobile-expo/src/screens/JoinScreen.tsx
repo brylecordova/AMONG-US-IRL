@@ -135,18 +135,24 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
   }, [serverUrl, sessionCode]);
 
   const handleJoinQrDetected = (parsed: ParsedQrAction) => {
-    setShowQrScanner(false);
     setErrorMsg(null);
     if (parsed.kind === 'JOIN') {
+      setShowQrScanner(false);
       setSessionCode(parsed.sessionCode);
       if (parsed.serverOrigin) {
         setServerUrl(parsed.serverOrigin);
       }
-    } else if (parsed.sessionCode) {
-      setSessionCode(parsed.sessionCode);
-    } else {
-      setErrorMsg('Please scan the Host PC "Join Mission" QR code.');
+      return { valid: true };
     }
+    if (parsed.sessionCode) {
+      setShowQrScanner(false);
+      setSessionCode(parsed.sessionCode);
+      return { valid: true };
+    }
+    return {
+      valid: false,
+      error: 'Please scan the Host PC "Join Mission" QR code.',
+    };
   };
 
   const handleSubmit = async () => {

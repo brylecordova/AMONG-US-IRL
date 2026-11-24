@@ -142,10 +142,15 @@ export const FuelEnginesTask: React.FC<TaskProps> = ({ onComplete }) => {
 };
 
 // 6. SUBMIT SCAN (Short · MedBay · Visual) — Holographic X-Ray Sweep + Live ECG Heartbeat
-export const MedBayScanTask: React.FC<TaskProps> = ({ onComplete }) => {
+export const MedBayScanTask: React.FC<TaskProps & { isImpostor?: boolean }> = ({
+  onComplete,
+  isImpostor = false,
+}) => {
   const [scanning, setScanning] = useState(false);
+  const [scanStage, setScanStage] = useState<'IDLE' | 'SCANNING' | 'CREW_PASS' | 'IMPOSTOR_WARNING'>('IDLE');
   const [progress, setProgress] = useState(0);
   const [ecgTick, setEcgTick] = useState(0);
+  const [blinkOn, setBlinkOn] = useState(true);
 
   useEffect(() => {
     const ecg = setInterval(() => setEcgTick((t) => (t + 1) % 40), 90);
@@ -153,54 +158,161 @@ export const MedBayScanTask: React.FC<TaskProps> = ({ onComplete }) => {
   }, []);
 
   useEffect(() => {
-    if (!scanning) return;
+    if (!scanning || scanStage !== 'SCANNING') return;
+    let finishTimeout: ReturnType<typeof setTimeout> | null = null;
     const timer = setInterval(() => {
       setProgress((p) => {
         const next = Math.min(100, p + 3);
         if (next >= 100) {
           clearInterval(timer);
-          soundEngine.playTaskSuccess();
-          setTimeout(onComplete, 400);
+          if (isImpostor) {
+            setScanStage('IMPOSTOR_WARNING');
+            soundEngine.playScanWarning();
+            // 2 additional seconds compared to normal 400ms crewmate result
+            finishTimeout = setTimeout(onComplete, 2400);
+          } else {
+            setScanStage('CREW_PASS');
+            soundEngine.playTaskSuccess();
+            finishTimeout = setTimeout(onComplete, 400);
+          }
         }
         return next;
       });
     }, 90);
-    return () => clearInterval(timer);
-  }, [scanning, onComplete]);
+    return () => {
+      clearInterval(timer);
+      if (finishTimeout) clearTimeout(finishTimeout);
+    };
+  }, [scanning, scanStage, isImpostor, onComplete]);
+
+  useEffect(() => {
+    if (scanStage !== 'IMPOSTOR_WARNING') return;
+    setBlinkOn(true);
+    const blinkTimer = setInterval(() => {
+      setBlinkOn((b) => !b);
+    }, 180);
+    return () => clearInterval(blinkTimer);
+  }, [scanStage]);
+
+  const isWarning = scanStage === 'IMPOSTOR_WARNING';
+  const warningFlash = isWarning && blinkOn;
 
   return (
-    <div className="bg-[#081C24] border-2 border-cyan-500/40 rounded-xl p-4 sm:p-5 space-y-4 select-none">
+    <div
+      className={`border-2 rounded-xl p-4 sm:p-5 space-y-4 select-none transition-colors duration-100 ${
+        isWarning
+          ? warningFlash
+            ? 'bg-[#2A060B] border-red-500 shadow-[0_0_28px_rgba(239,68,68,0.6)]'
+            : 'bg-[#170508] border-red-900'
+          : 'bg-[#081C24] border-cyan-500/40'
+      }`}
+    >
       {/* Scanner Hologram Viewport */}
-      <div className="relative h-48 bg-slate-950/95 border border-cyan-500/40 rounded-xl overflow-hidden flex flex-col items-center justify-center gap-2">
+      <div
+        className={`relative h-48 border rounded-xl overflow-hidden flex flex-col items-center justify-center gap-2 transition-colors duration-100 ${
+          isWarning
+            ? warningFlash
+              ? 'bg-[#1D0407] border-red-500'
+              : 'bg-slate-950 border-red-800/80'
+            : 'bg-slate-950/95 border-cyan-500/40'
+        }`}
+      >
         {/* Live ECG Monitor Strip at Top */}
-        <svg viewBox="0 0 160 28" className="absolute top-2 inset-x-3 h-7 opacity-80 pointer-events-none">
+        <svg viewBox="0 0 160 28" className="absolute top-2 inset-x-3 h-7 opacity-85 pointer-events-none">
           <polyline
             fill="none"
-            stroke="#10B981"
-            strokeWidth="1.6"
-            points={`0,16 32,16 40,16 46,6 52,24 58,10 64,16 105,16 112,8 118,22 124,16 160,16`}
+            stroke={isWarning ? '#EF4444' : '#10B981'}
+            strokeWidth={isWarning ? '2.2' : '1.6'}
+            points={
+              isWarning
+                ? '0,16 24,16 32,4 38,26 44,3 50,25 56,16 86,16 94,4 100,26 106,5 112,24 120,16 160,16'
+                : '0,16 32,16 40,16 46,6 52,24 58,10 64,16 105,16 112,8 118,22 124,16 160,16'
+            }
             strokeDasharray="160"
             strokeDashoffset={ecgTick * -4}
           />
         </svg>
 
+        {/* Blinking Warning Header Overlay for Impostor X-Ray */}
+        {isWarning && (
+          <div
+            className={`absolute top-9 inset-x-3 text-center font-mono text-[11px] font-bold tracking-widest px-2 py-0.5 rounded transition-opacity duration-75 ${
+              warningFlash
+                ? 'bg-red-600 text-white opacity-100 shadow-[0_0_12px_#ef4444]'
+                : 'bg-red-950/80 text-red-400 opacity-50'
+            }`}
+          >
+            ⚠ WARNING: ANOMALOUS BIO-XRAY
+          </div>
+        )}
+
         {/* Biometric Crewmate X-Ray Silhouette */}
         <svg width="82" height="102" viewBox="0 0 64 80" fill="none" className="mt-3">
-          <rect x="8" y="24" width="9" height="28" rx="4" fill="#0E7490" stroke="#22D3EE" strokeWidth="2" />
+          <rect
+            x="8"
+            y="24"
+            width="9"
+            height="28"
+            rx="4"
+            fill={isWarning ? '#7F1D1D' : '#0E7490'}
+            stroke={isWarning ? (warningFlash ? '#FCA5A5' : '#EF4444') : '#22D3EE'}
+            strokeWidth="2"
+          />
           <path
             d="M17 24C17 12 24 7 33 7C43 7 50 13 50 25V58C50 62 46 65 42 65C38 65 37 60 37 54H30C30 60 29 65 25 65C21 65 17 62 17 58V24Z"
-            fill="#083344"
-            stroke="#22D3EE"
+            fill={isWarning ? (warningFlash ? '#7F1D1D' : '#450A0A') : '#083344'}
+            stroke={isWarning ? (warningFlash ? '#FCA5A5' : '#EF4444') : '#22D3EE'}
             strokeWidth="2.5"
           />
-          <rect x="27" y="16" width="23" height="14" rx="7" fill="#38BDF8" stroke="#22D3EE" strokeWidth="2" />
+          <rect
+            x="27"
+            y="16"
+            width="23"
+            height="14"
+            rx="7"
+            fill={isWarning ? (warningFlash ? '#EF4444' : '#991B1B') : '#38BDF8'}
+            stroke={isWarning ? '#FECACA' : '#22D3EE'}
+            strokeWidth="2"
+          />
           {/* Internal Skeletal / Core Biometric Overlay */}
           {scanning && (
-            <g opacity={Math.min(1, progress / 35 + 0.25)}>
-              <line x1="33" y1="33" x2="33" y2="53" stroke="#34D399" strokeWidth="2" strokeLinecap="round" />
-              <line x1="25" y1="38" x2="41" y2="38" stroke="#34D399" strokeWidth="1.8" strokeLinecap="round" />
-              <line x1="26" y1="43" x2="40" y2="43" stroke="#34D399" strokeWidth="1.8" strokeLinecap="round" />
-              <line x1="27" y1="48" x2="39" y2="48" stroke="#34D399" strokeWidth="1.8" strokeLinecap="round" />
+            <g opacity={isWarning ? (warningFlash ? 1 : 0.35) : Math.min(1, progress / 35 + 0.25)}>
+              <line
+                x1="33"
+                y1="33"
+                x2="33"
+                y2="53"
+                stroke={isWarning ? '#FCA5A5' : '#34D399'}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <line
+                x1="25"
+                y1="38"
+                x2="41"
+                y2="38"
+                stroke={isWarning ? '#EF4444' : '#34D399'}
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <line
+                x1="26"
+                y1="43"
+                x2="40"
+                y2="43"
+                stroke={isWarning ? '#EF4444' : '#34D399'}
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <line
+                x1="27"
+                y1="48"
+                x2="39"
+                y2="48"
+                stroke={isWarning ? '#EF4444' : '#34D399'}
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
             </g>
           )}
         </svg>
@@ -208,24 +320,50 @@ export const MedBayScanTask: React.FC<TaskProps> = ({ onComplete }) => {
         {/* Hexagonal MedBay Pad */}
         <div
           className={`w-36 h-3 rounded-full border transition-colors ${
-            scanning ? 'bg-emerald-400/35 border-emerald-300 shadow-[0_0_16px_#34d399]' : 'bg-cyan-500/20 border-cyan-400/50'
+            isWarning
+              ? warningFlash
+                ? 'bg-red-500/60 border-red-300 shadow-[0_0_20px_#ef4444]'
+                : 'bg-red-900/40 border-red-700'
+              : scanning
+                ? 'bg-emerald-400/35 border-emerald-300 shadow-[0_0_16px_#34d399]'
+                : 'bg-cyan-500/20 border-cyan-400/50'
           }`}
         />
 
         {scanning && (
           <div
-            className="absolute inset-x-0 h-1.5 bg-emerald-400 shadow-[0_0_14px_#34d399]"
-            style={{ top: `${progress}%` }}
+            className={`absolute inset-x-0 h-1.5 ${
+              isWarning
+                ? warningFlash
+                  ? 'bg-red-500 shadow-[0_0_18px_#ef4444]'
+                  : 'bg-red-800/70'
+                : 'bg-emerald-400 shadow-[0_0_14px_#34d399]'
+            }`}
+            style={{ top: isWarning ? '50%' : `${progress}%` }}
           />
         )}
       </div>
 
       {/* Progressive Telemetry Readouts */}
-      <div className="grid grid-cols-2 gap-2 text-xs font-mono text-cyan-200 bg-slate-950/80 border border-cyan-500/20 p-3 rounded-lg">
-        <span>HT: {progress >= 25 ? '3\'6"' : '---'}</span>
+      <div
+        className={`grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-lg border transition-colors ${
+          isWarning
+            ? 'bg-[#190508] border-red-500/60 text-red-200'
+            : 'bg-slate-950/80 border-cyan-500/20 text-cyan-200'
+        }`}
+      >
+        <span>HT: {progress >= 25 ? "3'6\"" : '---'}</span>
         <span>WT: {progress >= 50 ? '92 LBS' : '---'}</span>
-        <span>BLOOD: {progress >= 75 ? 'O-' : '---'}</span>
-        <span className="tabular-nums text-emerald-300 font-bold">SCAN: {progress}%</span>
+        <span className={isWarning ? 'text-red-400 font-bold' : ''}>
+          BLOOD: {isWarning ? 'UNKNOWN / ???' : progress >= 75 ? 'O-' : '---'}
+        </span>
+        <span
+          className={`tabular-nums font-bold ${
+            isWarning ? 'text-red-400' : 'text-emerald-300'
+          }`}
+        >
+          {isWarning ? 'ANOMALY!' : `SCAN: ${progress}%`}
+        </span>
       </div>
 
       {!scanning ? (
@@ -234,11 +372,26 @@ export const MedBayScanTask: React.FC<TaskProps> = ({ onComplete }) => {
           onClick={() => {
             soundEngine.playInvestigateScan();
             setScanning(true);
+            setScanStage('SCANNING');
           }}
           className="w-full min-h-[48px] py-3.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-sm transition-transform active:scale-95"
         >
           Step Onto MedBay Pad &amp; Scan
         </button>
+      ) : isWarning ? (
+        <div
+          className={`text-center font-mono text-xs font-bold py-2 rounded-lg transition-colors ${
+            warningFlash
+              ? 'bg-red-600/30 text-red-200 border border-red-500'
+              : 'bg-red-950/40 text-red-400 border border-red-900'
+          }`}
+        >
+          ⚠ WARNING: NON-CREW BIOMETRICS DETECTED (IMPOSTOR)
+        </div>
+      ) : scanStage === 'CREW_PASS' ? (
+        <div className="text-center font-mono text-xs font-bold text-emerald-300 py-2">
+          SCAN COMPLETE — NORMAL CREW BIOMETRICS VERIFIED
+        </div>
       ) : (
         <div className="text-center font-mono text-xs text-emerald-300 py-2">
           BIOMETRIC X-RAY SWEEP IN PROGRESS — STAND STILL

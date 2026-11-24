@@ -289,6 +289,7 @@ export interface MeetingSummary {
   startedAt: number;
   discussionEndsAt: number;
   votingEndsAt: number;
+  revealEndsAt?: number;
   verdictEndsAt?: number;
   arrivedCount: number;
   voteNowCount?: number;

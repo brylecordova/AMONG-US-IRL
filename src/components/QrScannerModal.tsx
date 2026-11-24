@@ -5,12 +5,19 @@ import { Camera, ImagePlus, Keyboard, RefreshCw, SwitchCamera, X } from 'lucide-
 import { parseQrOrManualInput, ParsedQrAction } from '../shared/skeldData';
 import { soundEngine } from '../utils/sound';
 
+export interface QrScanValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
 interface QrScannerModalProps {
   title: string;
   subtitle: string;
   accentColor?: 'emerald' | 'red' | 'cyan';
   hideManualCodes?: boolean;
-  onDetected: (parsed: ParsedQrAction) => void;
+  onDetected: (
+    parsed: ParsedQrAction,
+  ) => Promise<QrScanValidationResult | void> | QrScanValidationResult | void;
   onClose: () => void;
 }
 
@@ -27,12 +34,26 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number>(0);
   const detectedRef = useRef(false);
+  const onDetectedRef = useRef(onDetected);
+  onDetectedRef.current = onDetected;
+  const mountedRef = useRef(true);
+  const cooldownTimerRef = useRef<number | null>(null);
 
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [manualCode, setManualCode] = useState('');
   const [manualError, setManualError] = useState<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (cooldownTimerRef.current !== null) {
+        window.clearTimeout(cooldownTimerRef.current);
+      }
+    };
+  }, []);
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -42,6 +63,46 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     }
     setCameraActive(false);
   }, []);
+
+  const submitParsedQr = useCallback(
+    async (parsed: ParsedQrAction, fromCamera: boolean): Promise<boolean> => {
+      if (detectedRef.current) return false;
+      detectedRef.current = true;
+
+      try {
+        const result = await onDetectedRef.current(parsed);
+        if (!mountedRef.current) return true;
+
+        if (result && result.valid === false) {
+          setManualError(
+            result.error || 'QR code not valid right now. Aim at a valid station or badge QR.',
+          );
+          if (cooldownTimerRef.current !== null) {
+            window.clearTimeout(cooldownTimerRef.current);
+          }
+          cooldownTimerRef.current = window.setTimeout(() => {
+            detectedRef.current = false;
+          }, fromCamera ? 1200 : 250);
+          return false;
+        }
+
+        soundEngine.playClick();
+        stopCamera();
+        return true;
+      } catch (err) {
+        if (!mountedRef.current) return false;
+        setManualError(err instanceof Error ? err.message : 'Unable to process QR code.');
+        if (cooldownTimerRef.current !== null) {
+          window.clearTimeout(cooldownTimerRef.current);
+        }
+        cooldownTimerRef.current = window.setTimeout(() => {
+          detectedRef.current = false;
+        }, fromCamera ? 1200 : 250);
+        return false;
+      }
+    },
+    [stopCamera],
+  );
 
   const startCamera = useCallback(
     async (preferredFacing: 'environment' | 'user') => {
@@ -96,6 +157,11 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         }
       }
 
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       streamRef.current = stream;
       const video = videoRef.current;
       if (!video) {
@@ -131,65 +197,73 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       }
 
       let nativeDetecting = false;
+      let lastInvalidRawAt = 0;
 
-      const handleDecodedText = (rawText: string): boolean => {
+      const handleDecodedText = (rawText: string) => {
+        if (detectedRef.current) return;
         const parsed = parseQrOrManualInput(rawText);
-        if (parsed && !detectedRef.current) {
-          detectedRef.current = true;
-          soundEngine.playClick();
-          stopCamera();
-          onDetected(parsed);
-          return true;
+        if (!parsed) {
+          const now = Date.now();
+          if (now - lastInvalidRawAt > 1500) {
+            lastInvalidRawAt = now;
+            setManualError('Unrecognized QR code — keep aiming at an AMONG-US IRL QR code.');
+          }
+          return;
         }
-        return false;
+        void submitParsedQr(parsed, true);
       };
 
       const scanFrame = () => {
-        if (detectedRef.current) return;
-        const v = videoRef.current;
-        const c = canvasRef.current;
-        if (v && c && v.readyState >= v.HAVE_CURRENT_DATA) {
-          const w = v.videoWidth;
-          const h = v.videoHeight;
-          if (w > 0 && h > 0) {
-            if (nativeDetector && !nativeDetecting) {
-              nativeDetecting = true;
-              nativeDetector
-                .detect(v)
-                .then((codes) => {
-                  for (const item of codes) {
-                    if (item.rawValue && handleDecodedText(item.rawValue)) {
-                      return;
-                    }
-                  }
-                })
-                .catch(() => {
-                  nativeDetector = null;
-                })
-                .finally(() => {
-                  nativeDetecting = false;
-                });
-            }
+        if (!mountedRef.current || !streamRef.current) return;
 
-            c.width = w;
-            c.height = h;
-            const ctx = c.getContext('2d', { willReadFrequently: true });
-            if (ctx) {
-              ctx.drawImage(v, 0, 0, w, h);
-              const imgData = ctx.getImageData(0, 0, w, h);
-              const code = jsQR(imgData.data, w, h, { inversionAttempts: 'attemptBoth' });
-              if (code && code.data && handleDecodedText(code.data)) {
-                return;
+        if (!detectedRef.current) {
+          const v = videoRef.current;
+          const c = canvasRef.current;
+          if (v && c && v.readyState >= v.HAVE_CURRENT_DATA) {
+            const w = v.videoWidth;
+            const h = v.videoHeight;
+            if (w > 0 && h > 0) {
+              if (nativeDetector && !nativeDetecting) {
+                nativeDetecting = true;
+                nativeDetector
+                  .detect(v)
+                  .then((codes) => {
+                    for (const item of codes) {
+                      if (item.rawValue) {
+                        handleDecodedText(item.rawValue);
+                        break;
+                      }
+                    }
+                  })
+                  .catch(() => {
+                    nativeDetector = null;
+                  })
+                  .finally(() => {
+                    nativeDetecting = false;
+                  });
+              }
+
+              c.width = w;
+              c.height = h;
+              const ctx = c.getContext('2d', { willReadFrequently: true });
+              if (ctx) {
+                ctx.drawImage(v, 0, 0, w, h);
+                const imgData = ctx.getImageData(0, 0, w, h);
+                const code = jsQR(imgData.data, w, h, { inversionAttempts: 'attemptBoth' });
+                if (code && code.data) {
+                  handleDecodedText(code.data);
+                }
               }
             }
           }
         }
+
         rafRef.current = requestAnimationFrame(scanFrame);
       };
 
       rafRef.current = requestAnimationFrame(scanFrame);
     },
-    [onDetected, stopCamera],
+    [hideManualCodes, stopCamera, submitParsedQr],
   );
 
   useEffect(() => {
@@ -224,15 +298,13 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
           const parsed = parseQrOrManualInput(decoded.data);
           if (parsed) {
             URL.revokeObjectURL(url);
-            soundEngine.playClick();
-            stopCamera();
-            onDetected(parsed);
+            void submitParsedQr(parsed, false);
             return;
           }
         }
       }
       URL.revokeObjectURL(url);
-      setManualError('No valid Skeld QR detected in photo. Try closer framing or enter code manually.');
+      setManualError('No valid AMONG-US IRL QR detected in photo. Try closer framing or enter code manually.');
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -248,9 +320,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       setManualError('Unrecognized code. Enter a task code (e.g. WIR1), player suit (e.g. RED), or EMRG.');
       return;
     }
-    soundEngine.playClick();
-    stopCamera();
-    onDetected(parsed);
+    void submitParsedQr(parsed, false);
   };
 
   const borderAccent =
