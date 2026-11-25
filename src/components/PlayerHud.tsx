@@ -2,12 +2,18 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertTriangle,
+  Award,
   CheckCircle2,
+  Clock,
   CloudRain,
   Eye,
+  Flame,
   Lock,
+  Map as MapIcon,
+  Monitor,
   QrCode,
   Radio,
+  Shield,
   ShieldAlert,
   Skull,
   Sparkles,
@@ -16,6 +22,7 @@ import {
   Unlock,
   Volume2,
   VolumeX,
+  Wind,
   X,
   ZapOff,
 } from 'lucide-react';
@@ -28,7 +35,9 @@ import {
   PlayerColorId,
   PublicAlignment,
   SabotageKind,
+  SKELD_ROOMS,
   SkeldTaskDef,
+  StationActivityEvent,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { SkeldTaskIconBadge } from './PrintedQrCards';
@@ -45,17 +54,41 @@ interface PlayerHudProps {
   meetingAlertTrigger: number;
   sabotageAlertTrigger: number;
   missionStartedTrigger: number;
+  shieldBlockedEvent?: {
+    seq: number;
+    targetId?: string;
+    targetName?: string;
+    guardianId?: string;
+  } | null;
+  sheriffActionEvent?: {
+    seq: number;
+    hit: boolean;
+    targetName?: string;
+    sheriffName?: string;
+  } | null;
   onUpdateState: (next: ClientGameState) => void;
   onLeaveSession: () => void;
 }
 
-type ScanMode = 'AUTO' | 'KILL' | 'INVESTIGATE';
+type ScanMode = 'AUTO' | 'KILL' | 'INVESTIGATE' | 'SHERIFF';
 
 interface ForensicBanner {
   targetName: string;
   targetColor: PlayerColorId;
   reportedAlignment: PublicAlignment;
 }
+
+type StationModalState =
+  | {
+      kind: 'ADMIN_MAP';
+      roomActivity: Record<string, number>;
+      expiresAt: number;
+    }
+  | {
+      kind: 'SECURITY_FEED';
+      feed: StationActivityEvent[];
+      expiresAt: number;
+    };
 
 export const PlayerHud: React.FC<PlayerHudProps> = ({
   state,
@@ -64,6 +97,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   meetingAlertTrigger,
   sabotageAlertTrigger,
   missionStartedTrigger,
+  shieldBlockedEvent,
+  sheriffActionEvent,
   onUpdateState,
   onLeaveSession,
 }) => {
@@ -80,6 +115,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [reportingBody, setReportingBody] = useState(false);
   const [voteNowBusy, setVoteNowBusy] = useState(false);
   const [forensicResult, setForensicResult] = useState<ForensicBanner | null>(null);
+  const [stationModal, setStationModal] = useState<StationModalState | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [muted, setMuted] = useState(soundEngine.isMuted());
   const [nowMs, setNowMs] = useState(Date.now());
@@ -88,10 +124,20 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [localSabotageRemaining, setLocalSabotageRemaining] = useState(
     state.self.sabotageCooldownRemainingSec ?? 0,
   );
+  const [localShieldRemaining, setLocalShieldRemaining] = useState(
+    state.self.shieldCooldownRemainingSec ?? 0,
+  );
+  const [localVentRemaining, setLocalVentRemaining] = useState(
+    state.self.ventCooldownRemainingSec ?? 0,
+  );
   const [sabotageBusy, setSabotageBusy] = useState(false);
+  const [shieldBusy, setShieldBusy] = useState(false);
+  const [ghostBusy, setGhostBusy] = useState(false);
+  const [ghostRoom, setGhostRoom] = useState<string>(SKELD_ROOMS[0]);
   const [colorBusy, setColorBusy] = useState(false);
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
+  const lastVisualAlertIdRef = useRef<string | null>(null);
   const serverSkewMsRef = useRef(state.serverTime - Date.now());
 
   // Sync cooldowns & clock offset from server snapshot and tick smoothly
@@ -100,19 +146,27 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     setLocalKillRemaining(state.self.killCooldownRemainingSec);
     setLocalScanRemaining(state.self.scanCooldownRemainingSec);
     setLocalSabotageRemaining(state.self.sabotageCooldownRemainingSec ?? 0);
+    setLocalShieldRemaining(state.self.shieldCooldownRemainingSec ?? 0);
+    setLocalVentRemaining(state.self.ventCooldownRemainingSec ?? 0);
   }, [
     state.self.killCooldownRemainingSec,
     state.self.scanCooldownRemainingSec,
     state.self.sabotageCooldownRemainingSec,
+    state.self.shieldCooldownRemainingSec,
+    state.self.ventCooldownRemainingSec,
     state.serverTime,
   ]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setNowMs(Date.now());
+      const now = Date.now();
+      setNowMs(now);
       setLocalKillRemaining((k) => Math.max(0, k - 1));
       setLocalScanRemaining((s) => Math.max(0, s - 1));
       setLocalSabotageRemaining((sb) => Math.max(0, sb - 1));
+      setLocalShieldRemaining((sh) => Math.max(0, sh - 1));
+      setLocalVentRemaining((v) => Math.max(0, v - 1));
+      setStationModal((prev) => (prev && now >= prev.expiresAt ? null : prev));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -134,6 +188,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
+      setStationModal(null);
       setShowKilledModal(true);
     }
   }, [killedAlertTrigger]);
@@ -146,16 +201,60 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
+      setStationModal(null);
     }
   }, [meetingAlertTrigger]);
 
-  // Play sabotage alarm and interrupt open regular tasks if Blackout triggers
+  // Play sabotage alarm
   useEffect(() => {
     if (sabotageAlertTrigger > 0) {
-      soundEngine.playSabotageAlarm();
+      if (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') {
+        soundEngine.playMeltdownAlarm();
+      } else {
+        soundEngine.playSabotageAlarm();
+      }
       haptics.event('sabotage');
     }
-  }, [sabotageAlertTrigger]);
+  }, [sabotageAlertTrigger, state.activeSabotage?.kind]);
+
+  // Guardian Shield deflection sound/toast for target & guardian
+  useEffect(() => {
+    if (!shieldBlockedEvent) return;
+    if (
+      state.self.playerId === shieldBlockedEvent.targetId ||
+      state.self.playerId === shieldBlockedEvent.guardianId
+    ) {
+      soundEngine.playShieldBlock();
+      haptics.notify('success');
+      setToastMsg(
+        state.self.playerId === shieldBlockedEvent.targetId
+          ? 'Your Guardian Aegis Shield deflected an Impostor strike!'
+          : `Your Aegis Shield saved ${shieldBlockedEvent.targetName || 'a teammate'}!`,
+      );
+    }
+  }, [shieldBlockedEvent, state.self.playerId]);
+
+  // Sheriff shot sound effect
+  useEffect(() => {
+    if (!sheriffActionEvent) return;
+    soundEngine.playSheriffShot(sheriffActionEvent.hit);
+    haptics.impact('heavy');
+  }, [sheriffActionEvent]);
+
+  // Visual Task public alert toast
+  useEffect(() => {
+    if (
+      state.phase === 'PLAYING' &&
+      state.settings.visualTaskAlerts &&
+      state.recentVisualAlert &&
+      state.recentVisualAlert.id !== lastVisualAlertIdRef.current
+    ) {
+      lastVisualAlertIdRef.current = state.recentVisualAlert.id;
+      setToastMsg(
+        `Visual Task Alert: ${state.recentVisualAlert.playerName} completed ${state.recentVisualAlert.taskName} in ${state.recentVisualAlert.room}.`,
+      );
+    }
+  }, [state.phase, state.settings.visualTaskAlerts, state.recentVisualAlert]);
 
   useEffect(() => {
     if (
@@ -183,6 +282,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setShowTerminal(false);
       setTerminalUnlocked(false);
       setDeadBodyFound(null);
+      setStationModal(null);
     }
 
     if (
@@ -200,13 +300,26 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const isImpostorTeam =
     state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
   const isInvestigator = state.self.secretRole === 'INVESTIGATOR';
-  const didPlayerWin = state.winner === 'IMPOSTORS' ? isImpostorTeam : !isImpostorTeam;
+  const isSheriff = state.self.secretRole === 'SHERIFF';
+  const isGuardian = state.self.secretRole === 'GUARDIAN_ANGEL';
+  const isJester = state.self.secretRole === 'JESTER';
+  const isCrewTeam = !isImpostorTeam && !isJester;
+
+  const didPlayerWin =
+    state.winner === 'JESTER'
+      ? isJester
+      : state.winner === 'IMPOSTORS'
+        ? isImpostorTeam
+        : isCrewTeam;
   const myColor = getColorDef(state.self.color);
 
   // Play victory or defeat sound & haptics when game ends
   useEffect(() => {
     if (state.phase === 'ENDED') {
-      if (didPlayerWin) {
+      if (state.winner === 'JESTER' && isJester) {
+        soundEngine.playJesterWin();
+        haptics.notify('success');
+      } else if (didPlayerWin) {
         soundEngine.playVictory();
         haptics.notify('success');
       } else {
@@ -214,7 +327,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         haptics.notify('error');
       }
     }
-  }, [state.phase, didPlayerWin]);
+  }, [state.phase, state.winner, isJester, didPlayerWin]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -232,6 +345,12 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
   const signalJamLeftSec =
     state.activeSabotage?.kind === 'SIGNAL_JAM' && state.activeSabotage.expiresAt
+      ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNowMs) / 1000))
+      : 0;
+
+  const crisisLeftSec =
+    (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') &&
+    state.activeSabotage.expiresAt
       ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNowMs) / 1000))
       : 0;
 
@@ -280,11 +399,66 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       return { valid: true };
     }
 
+    if (parsed.kind === 'STATION') {
+      try {
+        const res = await fetch(`/api/sessions/${state.sessionCode}/station-scan`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${playerToken}`,
+          },
+          body: JSON.stringify({ stationId: parsed.station.id }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setScannerMode(null);
+        onUpdateState(data.state);
+        const outcome = data.outcome;
+        if (outcome.kind === 'ADMIN_MAP') {
+          haptics.notify('success');
+          setStationModal({
+            kind: 'ADMIN_MAP',
+            roomActivity: outcome.roomActivity,
+            expiresAt: Date.now() + 12_000,
+          });
+        } else if (outcome.kind === 'SECURITY_FEED') {
+          haptics.notify('success');
+          setStationModal({
+            kind: 'SECURITY_FEED',
+            feed: outcome.feed,
+            expiresAt: Date.now() + 12_000,
+          });
+        } else if (outcome.kind === 'VENT_RELAY') {
+          if (outcome.activated) {
+            haptics.notify('success');
+          } else {
+            haptics.notify('warning');
+          }
+          showToast(outcome.message);
+        }
+        return { valid: true };
+      } catch (err) {
+        return {
+          valid: false,
+          error: err instanceof Error ? err.message : 'Station terminal rejected.',
+        };
+      }
+    }
+
     if (parsed.kind === 'MEETING') {
       if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
         return {
           valid: false,
           error: `Signal Jam active! Emergency Meetings are disabled for ${signalJamLeftSec}s.`,
+        };
+      }
+      if (
+        (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') &&
+        crisisLeftSec > 0
+      ) {
+        return {
+          valid: false,
+          error: `Cannot call Emergency Meeting during an active ${state.activeSabotage.kind} crisis!`,
         };
       }
       try {
@@ -328,6 +502,24 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           soundEngine.playKillAlert();
           haptics.impact('heavy');
           showToast(`Eliminated ${outcome.victimName} (${getColorDef(outcome.victimColor).label}).`);
+        } else if (outcome.kind === 'SHIELD_BLOCKED') {
+          soundEngine.playShieldBlock();
+          haptics.notify('warning');
+          showToast(
+            `Blocked! ${outcome.targetName} was protected by a Guardian Aegis Shield (10s recharge).`,
+          );
+        } else if (outcome.kind === 'SHERIFF_KILL') {
+          soundEngine.playSheriffShot(true);
+          haptics.impact('heavy');
+          showToast(
+            `Justice Shot! Eliminated Impostor ${outcome.targetName} (${getColorDef(outcome.targetColor).label}).`,
+          );
+        } else if (outcome.kind === 'SHERIFF_MISFIRE') {
+          soundEngine.playSheriffShot(false);
+          haptics.notify('error');
+          showToast(
+            `Misfire! ${outcome.targetName} was NOT an Impostor — you were eliminated!`,
+          );
         } else if (outcome.kind === 'DEAD_BODY_FOUND') {
           soundEngine.playClick();
           haptics.notify('warning');
@@ -383,13 +575,72 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       showToast(
         kind === 'BLACKOUT'
           ? `Power Blackout triggered! Tasks locked until Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} is repaired.`
-          : 'Signal Jam triggered! Emergency Meetings disabled for 60s.',
+          : kind === 'SIGNAL_JAM'
+            ? 'Signal Jam triggered! Emergency Meetings disabled for 60s.'
+            : kind === 'REACTOR'
+              ? 'Reactor Meltdown triggered! Crew must sync both Reactor stations.'
+              : 'O2 Depletion triggered! Crew must clear O2 Filter & Empty Chute.',
       );
     } catch (err) {
       haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to trigger sabotage.');
     } finally {
       setSabotageBusy(false);
+    }
+  };
+
+  const handleDeployShield = async (targetPlayerId: string) => {
+    soundEngine.playClick();
+    haptics.impact('medium');
+    setShieldBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/shield`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ targetPlayerId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      soundEngine.playShieldBlock();
+      haptics.notify('success');
+      onUpdateState(data.state);
+      setTerminalUnlocked(false);
+      setShowTerminal(false);
+      showToast(`Aegis Shield deployed on ${data.targetName} for 35s!`);
+    } catch (err) {
+      haptics.notify('error');
+      showToast(err instanceof Error ? err.message : 'Unable to deploy Aegis Shield.');
+    } finally {
+      setShieldBusy(false);
+    }
+  };
+
+  const handleUseGhostPower = async (power: 'GHOST_PING' | 'GHOST_FLICKER') => {
+    soundEngine.playClick();
+    haptics.impact('medium');
+    setGhostBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/ghost-power`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ power, room: ghostRoom }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
+      onUpdateState(data.state);
+      showToast(data.message);
+    } catch (err) {
+      haptics.notify('error');
+      showToast(err instanceof Error ? err.message : 'Ghost power unavailable.');
+    } finally {
+      setGhostBusy(false);
     }
   };
 
@@ -413,9 +664,20 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       if (data.powerRestored) {
         soundEngine.playTaskSuccess();
         showToast('Grid power restored at Electrical! All tasks unlocked.');
+      } else if (data.sabotageCleared === 'REACTOR') {
+        soundEngine.playTaskSuccess();
+        showToast('Reactor Meltdown stabilized!');
+      } else if (data.sabotageCleared === 'O2') {
+        soundEngine.playTaskSuccess();
+        showToast('O2 Reserves stabilized!');
+      } else if (data.meltdownProgress) {
+        soundEngine.playClick();
+        showToast(
+          `Crisis Station 1/2 synced! Partner must finish the 2nd station within 15s.`,
+        );
       } else {
         showToast(
-          isImpostorTeam
+          isImpostorTeam || isJester
             ? `Task station verified (${taskToSubmit.name}).`
             : `Completed ${taskToSubmit.name}!`,
         );
@@ -768,44 +1030,172 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     initial={{ opacity: 0, scale: 0.96 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.96 }}
-                    className="bg-amber-500/15 border-2 border-amber-400 rounded-2xl p-4 space-y-3"
+                    className={`border-2 rounded-2xl p-4 space-y-3 ${
+                      state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                        ? 'bg-red-600/20 border-red-500 animate-pulse'
+                        : 'bg-amber-500/15 border-amber-400'
+                    }`}
                   >
                     <div className="flex items-start gap-3">
                       {state.activeSabotage.kind === 'BLACKOUT' ? (
                         <ZapOff className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
-                      ) : (
+                      ) : state.activeSabotage.kind === 'SIGNAL_JAM' ? (
                         <Radio className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
+                      ) : state.activeSabotage.kind === 'REACTOR' ? (
+                        <Flame className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <Wind className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="font-display text-2xl font-bold text-amber-200 leading-none">
-                          {state.activeSabotage.kind === 'BLACKOUT'
-                            ? 'POWER BLACKOUT!'
-                            : 'COMMS SIGNAL JAM!'}
+                        <div className="flex items-center justify-between gap-2">
+                          <div
+                            className={`font-display text-2xl font-bold leading-none ${
+                              state.activeSabotage.kind === 'REACTOR' ||
+                              state.activeSabotage.kind === 'O2'
+                                ? 'text-red-300'
+                                : 'text-amber-200'
+                            }`}
+                          >
+                            {state.activeSabotage.kind === 'BLACKOUT' && 'POWER BLACKOUT!'}
+                            {state.activeSabotage.kind === 'SIGNAL_JAM' && 'COMMS SIGNAL JAM!'}
+                            {state.activeSabotage.kind === 'REACTOR' && 'REACTOR MELTDOWN!'}
+                            {state.activeSabotage.kind === 'O2' && 'O2 DEPLETION!'}
+                          </div>
+                          {(state.activeSabotage.kind === 'REACTOR' ||
+                            state.activeSabotage.kind === 'O2') && (
+                            <span className="font-mono text-lg font-bold text-white bg-red-600/60 px-2.5 py-0.5 rounded-lg tabular-nums">
+                              {crisisLeftSec}s
+                            </span>
+                          )}
                         </div>
-                        <p className="text-xs text-amber-100/90 mt-1.5 leading-relaxed">
-                          {state.activeSabotage.kind === 'BLACKOUT'
-                            ? `All regular tasks are disabled. Anyone alive — even if you already completed it or don't have it assigned — can scan Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} in Electrical to restore power!`
-                            : `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
+                        <p className="text-xs text-slate-100/90 mt-1.5 leading-relaxed">
+                          {state.activeSabotage.kind === 'BLACKOUT' &&
+                            `All regular tasks are disabled. Anyone alive can scan Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} in Electrical to restore power!`}
+                          {state.activeSabotage.kind === 'SIGNAL_JAM' &&
+                            `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
+                          {state.activeSabotage.kind === 'REACTOR' &&
+                            `Co-op Crisis: Complete Start Reactor${state.settings.hideManualCodes ? '' : ' (RCT9)'} AND Unlock Manifolds${state.settings.hideManualCodes ? '' : ' (MNF1)'} within 15s! (${(state.activeSabotage.clearedStations || []).length}/2 synced)`}
+                          {state.activeSabotage.kind === 'O2' &&
+                            `Co-op Crisis: Complete Clean O2 Filter${state.settings.hideManualCodes ? '' : ' (OXY6)'} AND Empty Chute${state.settings.hideManualCodes ? '' : ' (GRB3)'} within 15s! (${(state.activeSabotage.clearedStations || []).length}/2 synced)`}
                         </p>
                       </div>
                     </div>
 
-                    {state.activeSabotage.kind === 'BLACKOUT' && state.self.alive && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          haptics.impact('medium');
-                          setScannerMode('AUTO');
-                        }}
-                        className="w-full min-h-[44px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
-                      >
-                        <QrCode className="w-4 h-4" />
-                        <span>Scan Fix Wiring QR to Restore Power</span>
-                      </button>
-                    )}
+                    {(state.activeSabotage.kind === 'BLACKOUT' ||
+                      state.activeSabotage.kind === 'REACTOR' ||
+                      state.activeSabotage.kind === 'O2') &&
+                      state.self.alive && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            haptics.impact('medium');
+                            setScannerMode('AUTO');
+                          }}
+                          className={`w-full min-h-[44px] rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-colors ${
+                            state.activeSabotage.kind === 'BLACKOUT'
+                              ? 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                              : 'bg-red-500 hover:bg-red-400 text-white'
+                          }`}
+                        >
+                          <QrCode className="w-4 h-4" />
+                          <span>
+                            {state.activeSabotage.kind === 'BLACKOUT'
+                              ? 'Scan Fix Wiring QR to Restore Power'
+                              : 'Scan Crisis Station QR Now'}
+                          </span>
+                        </button>
+                      )}
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {/* Ghost Power Deck (Only visible when dead — never leaks roles while alive!) */}
+              {!state.self.alive && (
+                <div className="bg-[#12192A] border border-fuchsia-400/35 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-fuchsia-300" />
+                      <span className="font-display text-xl font-bold text-white">
+                        Ghost Power Deck
+                      </span>
+                    </div>
+                    <span className="font-mono text-xs font-bold text-cyan-300 tabular-nums">
+                      Energy {state.self.ghostEnergy}/100
+                    </span>
+                  </div>
+
+                  <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-white/10">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-400 to-fuchsia-400 transition-all duration-300"
+                      style={{ width: `${Math.min(100, state.self.ghostEnergy)}%` }}
+                    />
+                  </div>
+
+                  {isGuardian ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-slate-300">
+                        Guardian Angel Ghost Shield (50 Energy · 35s protection):
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {state.players
+                          .filter((p) => p.alive && p.playerId !== state.self.playerId)
+                          .map((target) => (
+                            <button
+                              key={target.playerId}
+                              type="button"
+                              disabled={
+                                shieldBusy ||
+                                localShieldRemaining > 0 ||
+                                state.self.ghostEnergy < 50
+                              }
+                              onClick={() => handleDeployShield(target.playerId)}
+                              className="p-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-45 border border-cyan-400/40 flex items-center gap-2 text-left"
+                            >
+                              <CrewmateAvatar color={target.color} size={24} />
+                              <span className="text-xs font-semibold text-white truncate">
+                                {target.name}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-xs text-slate-300">
+                        {isCrewTeam
+                          ? 'Crew Ghost Beacon (40 Energy): Send an anonymous pulse to Admin Map & TV.'
+                          : 'Phantom Sensor Flicker (45 Energy): Trigger a decoy ping on Admin Map & Security.'}
+                      </div>
+                      <div className="flex gap-2">
+                        <select
+                          value={ghostRoom}
+                          onChange={(e) => setGhostRoom(e.target.value)}
+                          className="flex-1 min-h-[42px] px-3 rounded-xl bg-slate-950 border border-white/15 text-xs text-white"
+                        >
+                          {SKELD_ROOMS.map((room) => (
+                            <option key={room} value={room}>
+                              {room}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={
+                            ghostBusy ||
+                            state.self.ghostEnergy < (isCrewTeam ? 40 : 45)
+                          }
+                          onClick={() =>
+                            handleUseGhostPower(isCrewTeam ? 'GHOST_PING' : 'GHOST_FLICKER')
+                          }
+                          className="min-h-[42px] px-3.5 rounded-xl bg-fuchsia-500 hover:bg-fuchsia-400 disabled:opacity-45 text-slate-950 font-bold text-xs whitespace-nowrap"
+                        >
+                          {isCrewTeam ? 'Send Ping (40)' : 'Flicker (45)'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Assigned Task List (Identical Label for All Roles) */}
               <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-3">
@@ -1176,20 +1566,33 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       {votersForPlayer.length > 0 && (
                         <div
                           className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5"
-                          aria-label={`Votes for ${p.name}: ${votersForPlayer.map((v) => v.name).join(', ')}`}
+                          aria-label={
+                            state.settings.anonymousVotes
+                              ? `Anonymous votes for ${p.name}: ${votersForPlayer.length}`
+                              : `Votes for ${p.name}: ${votersForPlayer.map((v) => v.name).join(', ')}`
+                          }
                         >
-                          {votersForPlayer.map((voter) => (
-                            <motion.span
-                              key={voter.playerId}
-                              initial={{ opacity: 0, scale: 0.6 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              transition={{ type: 'spring', stiffness: 420, damping: 24 }}
-                              title={`${voter.name} (${getColorDef(voter.color).label})`}
-                              className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
-                            >
-                              <CrewmateAvatar color={voter.color} size={22} />
-                            </motion.span>
-                          ))}
+                          {votersForPlayer.map((voter) =>
+                            state.settings.anonymousVotes ? (
+                              <span
+                                key={voter.playerId}
+                                className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-800 border border-white/15 text-[10px] font-mono text-slate-300"
+                              >
+                                Anon
+                              </span>
+                            ) : (
+                              <motion.span
+                                key={voter.playerId}
+                                initial={{ opacity: 0, scale: 0.6 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                                title={`${voter.name} (${getColorDef(voter.color).label})`}
+                                className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
+                              >
+                                <CrewmateAvatar color={voter.color} size={22} />
+                              </motion.span>
+                            ),
+                          )}
                         </div>
                       )}
                     </motion.button>
@@ -1210,18 +1613,27 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     </div>
                     {(state.meeting.voteBreakdown?.skipped.length || 0) > 0 && (
                       <div className="w-full pt-2 border-t border-white/10 flex items-center flex-wrap gap-1.5">
-                        {state.meeting.voteBreakdown!.skipped.map((voter) => (
-                          <motion.span
-                            key={voter.playerId}
-                            initial={{ opacity: 0, scale: 0.6 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ type: 'spring', stiffness: 420, damping: 24 }}
-                            title={`${voter.name} (${getColorDef(voter.color).label})`}
-                            className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
-                          >
-                            <CrewmateAvatar color={voter.color} size={22} />
-                          </motion.span>
-                        ))}
+                        {state.meeting.voteBreakdown!.skipped.map((voter) =>
+                          state.settings.anonymousVotes ? (
+                            <span
+                              key={voter.playerId}
+                              className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-900 border border-white/15 text-[10px] font-mono text-slate-300"
+                            >
+                              Anon
+                            </span>
+                          ) : (
+                            <motion.span
+                              key={voter.playerId}
+                              initial={{ opacity: 0, scale: 0.6 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                              title={`${voter.name} (${getColorDef(voter.color).label})`}
+                              className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
+                            >
+                              <CrewmateAvatar color={voter.color} size={22} />
+                            </motion.span>
+                          ),
+                        )}
                       </div>
                     )}
                   </motion.button>
@@ -1236,18 +1648,27 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     </div>
                     {state.meeting.voteBreakdown.skipped.length > 0 ? (
                       <div className="flex items-center flex-wrap gap-1.5">
-                        {state.meeting.voteBreakdown.skipped.map((voter) => (
-                          <motion.span
-                            key={voter.playerId}
-                            initial={{ opacity: 0, scale: 0.6 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ type: 'spring', stiffness: 420, damping: 24 }}
-                            title={`${voter.name} (${getColorDef(voter.color).label})`}
-                            className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
-                          >
-                            <CrewmateAvatar color={voter.color} size={22} />
-                          </motion.span>
-                        ))}
+                        {state.meeting.voteBreakdown.skipped.map((voter) =>
+                          state.settings.anonymousVotes ? (
+                            <span
+                              key={voter.playerId}
+                              className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-800 border border-white/15 text-[10px] font-mono text-slate-300"
+                            >
+                              Anon
+                            </span>
+                          ) : (
+                            <motion.span
+                              key={voter.playerId}
+                              initial={{ opacity: 0, scale: 0.6 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                              title={`${voter.name} (${getColorDef(voter.color).label})`}
+                              className="inline-flex items-center justify-center rounded-full bg-slate-950/85 border border-white/15 p-1"
+                            >
+                              <CrewmateAvatar color={voter.color} size={22} />
+                            </motion.span>
+                          ),
+                        )}
                       </div>
                     ) : (
                       <div className="text-xs text-slate-500">No crewmates skipped.</div>
@@ -1343,19 +1764,23 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     <div className="inline-flex items-center gap-1.5 font-mono text-xs font-bold uppercase tracking-[0.25em] text-amber-300">
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>
-                        {state.winner === 'IMPOSTORS'
-                          ? 'IMPOSTORS PREVAIL'
-                          : isInvestigator
-                            ? 'INVESTIGATOR & CREW VICTORY'
-                            : 'CREWMATES VICTORY'}
+                        {state.winner === 'JESTER'
+                          ? 'JESTER SOLO VICTORY'
+                          : state.winner === 'IMPOSTORS'
+                            ? 'IMPOSTORS PREVAIL'
+                            : isInvestigator
+                              ? 'INVESTIGATOR & CREW VICTORY'
+                              : 'CREWMATES VICTORY'}
                       </span>
                       <Sparkles className="w-3.5 h-3.5" />
                     </div>
                     <h1
                       className={`font-display text-6xl font-bold tracking-wider mt-1 drop-shadow-[0_4px_20px_rgba(255,255,255,0.28)] ${
-                        state.winner === 'CREWMATES'
-                          ? 'bg-gradient-to-r from-emerald-200 via-amber-200 to-cyan-200 bg-clip-text text-transparent'
-                          : 'bg-gradient-to-r from-red-200 via-amber-200 to-rose-200 bg-clip-text text-transparent'
+                        state.winner === 'JESTER'
+                          ? 'bg-gradient-to-r from-fuchsia-200 via-amber-200 to-pink-200 bg-clip-text text-transparent'
+                          : state.winner === 'CREWMATES'
+                            ? 'bg-gradient-to-r from-emerald-200 via-amber-200 to-cyan-200 bg-clip-text text-transparent'
+                            : 'bg-gradient-to-r from-red-200 via-amber-200 to-rose-200 bg-clip-text text-transparent'
                       }`}
                     >
                       VICTORY
@@ -1366,9 +1791,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   <div className="flex items-center justify-center flex-wrap gap-3 py-1">
                     {state.players
                       .filter((p) => {
+                        if (state.winner === 'JESTER') {
+                          return p.revealedRole === 'JESTER';
+                        }
                         const pImp =
                           p.revealedRole === 'IMPOSTOR' || p.revealedRole === 'SHAPESHIFTER';
-                        return state.winner === 'IMPOSTORS' ? pImp : !pImp;
+                        const pJes = p.revealedRole === 'JESTER';
+                        return state.winner === 'IMPOSTORS' ? pImp : !pImp && !pJes;
                       })
                       .map((winnerPlayer, idx) => (
                         <motion.div
@@ -1425,11 +1854,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   <div className="inline-flex items-center gap-2 text-slate-500 font-mono text-xs uppercase tracking-[0.24em]">
                     <CloudRain className="w-4 h-4 text-slate-500" />
                     <span>
-                      {state.winner === 'IMPOSTORS'
-                        ? isInvestigator
-                          ? 'INVESTIGATOR & CREW DEFEATED'
-                          : 'CREWMATES DEFEATED'
-                        : 'IMPOSTORS DEFEATED'}
+                      {state.winner === 'JESTER'
+                        ? 'THE JESTER OUTSMARTED EVERYONE'
+                        : state.winner === 'IMPOSTORS'
+                          ? isInvestigator
+                            ? 'INVESTIGATOR & CREW DEFEATED'
+                            : 'CREWMATES DEFEATED'
+                          : 'IMPOSTORS DEFEATED'}
                     </span>
                   </div>
 
@@ -1450,15 +1881,69 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/40 border border-slate-800 text-xs font-mono text-red-400/80">
                     <Skull className="w-3.5 h-3.5" />
                     <span>
-                      {state.winner === 'IMPOSTORS'
-                        ? 'IMPOSTORS TOOK CONTROL OF THE SKELD'
-                        : 'CREWMATES OUTLASTED THE SABOTAGE'}
+                      {state.winner === 'JESTER'
+                        ? 'THE JESTER WAS VOTED OUT'
+                        : state.winner === 'IMPOSTORS'
+                          ? 'IMPOSTORS TOOK CONTROL OF THE SKELD'
+                          : 'CREWMATES OUTLASTED THE SABOTAGE'}
                     </span>
                   </div>
 
                   <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
                     {state.winReason}
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* Match Awards */}
+            {state.awards && state.awards.length > 0 && (
+              <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+                  <Award className="w-4 h-4" />
+                  <span>Match Awards</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {state.awards.map((a) => (
+                    <div
+                      key={a.id}
+                      className="p-2.5 rounded-xl bg-slate-950/60 border border-white/10 flex items-center gap-2.5"
+                    >
+                      <CrewmateAvatar color={a.playerColor} size={30} />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-amber-200 truncate">
+                          {a.title} · {a.playerName}
+                        </div>
+                        <div className="text-[11px] text-slate-400 leading-snug">{a.description}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Post-Game Timeline */}
+            {state.timeline && state.timeline.length > 0 && (
+              <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-cyan-300">
+                  <Clock className="w-4 h-4" />
+                  <span>Mission Timeline</span>
+                </div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {state.timeline.map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="flex items-start justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-950/60 border border-white/5 text-xs"
+                    >
+                      <div>
+                        <div className="font-semibold text-white">{ev.title}</div>
+                        {ev.detail && <div className="text-[11px] text-slate-400">{ev.detail}</div>}
+                      </div>
+                      <span className="font-mono text-[10px] text-cyan-300 shrink-0 tabular-nums">
+                        +{ev.elapsedSec}s
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -1495,19 +1980,17 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   <span
                     className={`font-mono text-xs font-bold ${
                       p.revealedRole === 'IMPOSTOR' || p.revealedRole === 'SHAPESHIFTER'
-                        ? didPlayerWin
-                          ? 'text-red-400'
-                          : 'text-red-400/75'
-                        : p.revealedRole === 'INVESTIGATOR'
-                          ? didPlayerWin
-                            ? 'text-cyan-300'
-                            : 'text-cyan-400/70'
-                          : didPlayerWin
-                            ? 'text-emerald-400'
-                            : 'text-slate-400'
+                        ? 'text-red-400'
+                        : p.revealedRole === 'JESTER'
+                          ? 'text-fuchsia-400'
+                          : p.revealedRole === 'SHERIFF'
+                            ? 'text-amber-300'
+                            : p.revealedRole === 'INVESTIGATOR' || p.revealedRole === 'GUARDIAN_ANGEL'
+                              ? 'text-cyan-300'
+                              : 'text-emerald-400'
                     }`}
                   >
-                    {p.revealedRole}
+                    {p.revealedRole === 'GUARDIAN_ANGEL' ? 'GUARDIAN ANGEL' : p.revealedRole}
                   </span>
                 </motion.div>
               ))}
@@ -1645,9 +2128,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       className={`p-4 rounded-xl border ${
                         isImpostorTeam
                           ? 'bg-red-950/35 border-red-500/40'
-                          : isInvestigator
-                            ? 'bg-cyan-950/35 border-cyan-500/40'
-                            : 'bg-emerald-950/25 border-emerald-500/35'
+                          : isSheriff
+                            ? 'bg-amber-950/35 border-amber-500/40'
+                            : isJester
+                              ? 'bg-fuchsia-950/35 border-fuchsia-500/40'
+                              : isInvestigator || isGuardian
+                                ? 'bg-cyan-950/35 border-cyan-500/40'
+                                : 'bg-emerald-950/25 border-emerald-500/35'
                       }`}
                     >
                       <div className="text-xs text-slate-400">Private Role</div>
@@ -1655,12 +2142,18 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                         className={`font-display text-3xl font-bold ${
                           isImpostorTeam
                             ? 'text-red-400'
-                            : isInvestigator
-                              ? 'text-cyan-300'
-                              : 'text-emerald-400'
+                            : isSheriff
+                              ? 'text-amber-400'
+                              : isJester
+                                ? 'text-fuchsia-400'
+                                : isInvestigator || isGuardian
+                                  ? 'text-cyan-300'
+                                  : 'text-emerald-400'
                         }`}
                       >
-                        {state.self.secretRole}
+                        {state.self.secretRole === 'GUARDIAN_ANGEL'
+                          ? 'GUARDIAN ANGEL'
+                          : state.self.secretRole}
                       </div>
 
                       {state.self.teammates.length > 0 && (
@@ -1685,6 +2178,19 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                             {localKillRemaining > 0
                               ? `Recharging (${localKillRemaining}s)`
                               : 'Ready — Use Scan QR on Crewmate'}
+                          </span>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-slate-950/70 border border-white/10 flex items-center justify-between">
+                          <span className="text-xs text-slate-300">Airlock Vent Relay (VNT3)</span>
+                          <span
+                            className={`font-mono text-xs font-bold tabular-nums ${
+                              localVentRemaining > 0 ? 'text-amber-300' : 'text-emerald-300'
+                            }`}
+                          >
+                            {localVentRemaining > 0
+                              ? `Cooling (${localVentRemaining}s)`
+                              : 'Ready — Scan VNT3 (-6s Cooldown)'}
                           </span>
                         </div>
 
@@ -1734,8 +2240,109 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                               <Radio className="w-4 h-4 shrink-0" />
                               <span>Signal Jam (60s)</span>
                             </button>
+                            <button
+                              type="button"
+                              disabled={
+                                sabotageBusy ||
+                                Boolean(state.activeSabotage) ||
+                                localSabotageRemaining > 0
+                              }
+                              onClick={() => {
+                                handleTriggerSabotage('REACTOR');
+                                setTerminalUnlocked(false);
+                                setShowTerminal(false);
+                              }}
+                              className="min-h-[48px] px-3 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 disabled:opacity-45 border border-rose-400/50 text-rose-200 font-semibold text-xs flex items-center justify-center gap-2"
+                            >
+                              <Flame className="w-4 h-4 shrink-0" />
+                              <span>Reactor Crisis</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={
+                                sabotageBusy ||
+                                Boolean(state.activeSabotage) ||
+                                localSabotageRemaining > 0
+                              }
+                              onClick={() => {
+                                handleTriggerSabotage('O2');
+                                setTerminalUnlocked(false);
+                                setShowTerminal(false);
+                              }}
+                              className="min-h-[48px] px-3 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-45 border border-cyan-400/40 text-cyan-200 font-semibold text-xs flex items-center justify-center gap-2"
+                            >
+                              <Wind className="w-4 h-4 shrink-0" />
+                              <span>O2 Depletion</span>
+                            </button>
                           </div>
                         </div>
+                      </div>
+                    )}
+
+                    {isSheriff && state.self.alive && (
+                      <div className="space-y-2.5">
+                        <div className="p-3 rounded-xl bg-slate-950/70 border border-amber-500/30 flex items-center justify-between">
+                          <span className="text-xs text-slate-300">Justice Scan</span>
+                          <span
+                            className={`font-mono text-xs font-bold tabular-nums ${
+                              localScanRemaining > 0 ? 'text-amber-300' : 'text-emerald-400'
+                            }`}
+                          >
+                            {localScanRemaining > 0
+                              ? `Recharging (${localScanRemaining}s)`
+                              : 'Ready — Use Scan QR on Suspect'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/50 border border-white/5 rounded-xl p-3">
+                          Scanning an Impostor eliminates them immediately. Misfiring on an innocent Crewmate or Jester eliminates YOU instead.
+                        </p>
+                      </div>
+                    )}
+
+                    {isGuardian && state.self.alive && (
+                      <div className="space-y-2.5">
+                        <div className="p-3 rounded-xl bg-slate-950/70 border border-cyan-500/30 flex items-center justify-between">
+                          <span className="text-xs text-slate-300">Aegis Shield (35s)</span>
+                          <span
+                            className={`font-mono text-xs font-bold tabular-nums ${
+                              localShieldRemaining > 0 ? 'text-amber-300' : 'text-cyan-300'
+                            }`}
+                          >
+                            {localShieldRemaining > 0
+                              ? `Recharging (${localShieldRemaining}s)`
+                              : 'Ready — Select Ally Below'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {state.players
+                            .filter((p) => p.alive && p.playerId !== state.self.playerId)
+                            .map((ally) => (
+                              <button
+                                key={ally.playerId}
+                                type="button"
+                                disabled={shieldBusy || localShieldRemaining > 0}
+                                onClick={() => handleDeployShield(ally.playerId)}
+                                className="p-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-45 border border-cyan-400/40 flex items-center gap-2 text-left"
+                              >
+                                <CrewmateAvatar color={ally.color} size={26} />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold text-white truncate">
+                                    {ally.name}
+                                  </div>
+                                  <div className="text-[10px] text-cyan-300 flex items-center gap-1">
+                                    <Shield className="w-3 h-3" />
+                                    <span>Shield</span>
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {isJester && state.self.alive && (
+                      <div className="p-3 rounded-xl bg-fuchsia-950/35 border border-fuchsia-400/30 text-xs text-fuchsia-200 leading-relaxed">
+                        You are The Jester (Neutral Solo). Fake tasks and act suspicious—if the crew votes to eject you in a meeting, YOU win immediately!
                       </div>
                     )}
 
@@ -1754,7 +2361,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       </div>
                     )}
 
-                    {!isImpostorTeam && !isInvestigator && (
+                    {state.self.secretRole === 'CREWMATE' && (
                       <div className="p-3 rounded-xl bg-slate-950/70 border border-white/10 text-xs text-slate-300 leading-relaxed">
                         You are a Crewmate. Finish your assigned tasks and report any dead bodies using Scan QR.
                       </div>
@@ -1999,6 +2606,96 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 className="w-full py-3.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm"
               >
                 Enter Ghost Mode
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* STATION TERMINAL MODAL (12-SECOND ADMIN MAP TABLE / SECURITY FEED) */}
+      <AnimatePresence>
+        {stationModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#151C28] border-2 border-cyan-400/70 rounded-2xl p-5 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold">
+                  {stationModal.kind === 'ADMIN_MAP' ? (
+                    <MapIcon className="w-4 h-4" />
+                  ) : (
+                    <Monitor className="w-4 h-4" />
+                  )}
+                  <span>
+                    {stationModal.kind === 'ADMIN_MAP'
+                      ? 'ADMIN MAP TABLE · LIVE RADAR'
+                      : 'SECURITY TERMINAL · CAM LOGS'}
+                  </span>
+                </div>
+                <span className="font-mono text-xs font-bold text-amber-300 tabular-nums">
+                  {Math.max(0, Math.ceil((stationModal.expiresAt - nowMs) / 1000))}s
+                </span>
+              </div>
+
+              {stationModal.kind === 'ADMIN_MAP' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {SKELD_ROOMS.map((room) => {
+                    const count = stationModal.roomActivity[room] || 0;
+                    return (
+                      <div
+                        key={room}
+                        className={`px-3 py-2 rounded-xl border flex items-center justify-between ${
+                          count > 0
+                            ? 'bg-emerald-950/50 border-emerald-400/50 text-white'
+                            : 'bg-slate-950/60 border-white/10 text-slate-400'
+                        }`}
+                      >
+                        <span className="text-xs font-semibold truncate">{room}</span>
+                        <span
+                          className={`font-mono text-xs font-bold px-1.5 py-0.5 rounded tabular-nums ${
+                            count > 0 ? 'bg-emerald-400 text-slate-950' : 'bg-white/5 text-slate-500'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {stationModal.feed.length === 0 ? (
+                    <div className="text-xs text-slate-400 py-6 text-center">
+                      No recent camera or visual alerts recorded.
+                    </div>
+                  ) : (
+                    stationModal.feed.map((ev) => (
+                      <div
+                        key={ev.id}
+                        className="p-2.5 rounded-xl bg-slate-950/70 border border-white/10 text-xs"
+                      >
+                        <div className="font-semibold text-white">{ev.label}</div>
+                        <div className="text-[11px] font-mono text-cyan-300 mt-0.5">{ev.room}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setStationModal(null)}
+                className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs"
+              >
+                Close Readout
               </button>
             </motion.div>
           </motion.div>

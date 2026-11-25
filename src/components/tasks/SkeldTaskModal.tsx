@@ -52,7 +52,7 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
       case 'fix-wiring':
         return <FixWiringTask onComplete={onComplete} />;
       case 'swipe-card':
-        return <SwipeCardTask onComplete={onComplete} />;
+        return <SwipeCardTask onComplete={onComplete} isImpostor={isImpostor} />;
       case 'clear-asteroids':
         return <ClearAsteroidsTask onComplete={onComplete} />;
       case 'download-upload':

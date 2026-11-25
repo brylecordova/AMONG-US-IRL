@@ -221,6 +221,127 @@ class SoundEngine {
       osc.stop(t + 0.36);
     }
   }
+
+  public playShieldBlock(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const freqs = [330, 660, 990];
+    freqs.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + idx * 0.03;
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, t);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.72, t + 0.35);
+      gain.gain.setValueAtTime(0.14, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+    });
+  }
+
+  public playSheriffShot(hit: boolean): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(hit ? 980 : 620, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(hit ? 220 : 95, ctx.currentTime + 0.28);
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.32);
+
+    if (hit) {
+      const chime = ctx.createOscillator();
+      const cGain = ctx.createGain();
+      const t = ctx.currentTime + 0.18;
+      chime.type = 'sine';
+      chime.frequency.setValueAtTime(880, t);
+      cGain.gain.setValueAtTime(0.12, t);
+      cGain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      chime.connect(cGain);
+      cGain.connect(ctx.destination);
+      chime.start(t);
+      chime.stop(t + 0.32);
+    }
+  }
+
+  public playJesterWin(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const notes = [440, 554.37, 659.25, 830.61, 987.77];
+    notes.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + idx * 0.09;
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, t);
+      gain.gain.setValueAtTime(0.13, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.36);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.38);
+    });
+  }
+
+  public playEjectionWhoosh(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(75, ctx.currentTime + 0.95);
+    gain.gain.setValueAtTime(0.16, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.0);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 1.05);
+  }
+
+  public playMeltdownAlarm(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + i * 0.32;
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(780, t);
+      osc.frequency.setValueAtTime(510, t + 0.16);
+      gain.gain.setValueAtTime(0.13, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.31);
+    }
+  }
+
+  public speakHostCue(text: string, enabled = true): void {
+    if (this.muted || !enabled || typeof window === 'undefined') return;
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 1.04;
+      utter.pitch = 0.96;
+      utter.volume = 0.9;
+      window.speechSynthesis.speak(utter);
+    } catch {
+      // Speech synthesis may be restricted by browser autoplay policy
+    }
+  }
 }
 
 export const soundEngine = new SoundEngine();

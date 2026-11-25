@@ -128,6 +128,23 @@ export default function App() {
   const [meetingAlertTrigger, setMeetingAlertTrigger] = useState(0);
   const [sabotageAlertTrigger, setSabotageAlertTrigger] = useState(0);
   const [missionStartedTrigger, setMissionStartedTrigger] = useState(0);
+  const [shieldBlockedEvent, setShieldBlockedEvent] = useState<{
+    seq: number;
+    targetId?: string;
+    targetName?: string;
+    guardianId?: string;
+  } | null>(null);
+  const [sheriffActionEvent, setSheriffActionEvent] = useState<{
+    seq: number;
+    hit: boolean;
+    targetName?: string;
+    sheriffName?: string;
+  } | null>(null);
+  const [hostEvent, setHostEvent] = useState<{
+    seq: number;
+    type: string;
+    payload?: Record<string, unknown>;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -365,6 +382,11 @@ export default function App() {
         ws.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data) as { type: string; payload?: unknown };
+            const payloadRec =
+              msg.payload && typeof msg.payload === 'object'
+                ? (msg.payload as Record<string, unknown>)
+                : undefined;
+
             if (msg.type === 'state:host' && msg.payload) {
               setHostState(msg.payload as HostGameState);
             } else if (msg.type === 'state:player' && msg.payload) {
@@ -373,10 +395,37 @@ export default function App() {
               setKilledAlertTrigger((n) => n + 1);
             } else if (msg.type === 'meeting:alert') {
               setMeetingAlertTrigger((n) => n + 1);
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
             } else if (msg.type === 'sabotage:alert') {
               setSabotageAlertTrigger((n) => n + 1);
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
+            } else if (msg.type === 'shield:blocked') {
+              setShieldBlockedEvent({
+                seq: Date.now() + Math.random(),
+                targetId: typeof payloadRec?.targetId === 'string' ? payloadRec.targetId : undefined,
+                targetName: typeof payloadRec?.targetName === 'string' ? payloadRec.targetName : undefined,
+                guardianId: typeof payloadRec?.guardianId === 'string' ? payloadRec.guardianId : undefined,
+              });
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
+            } else if (msg.type === 'sheriff:action') {
+              setSheriffActionEvent({
+                seq: Date.now() + Math.random(),
+                hit: Boolean(payloadRec?.hit),
+                targetName: typeof payloadRec?.targetName === 'string' ? payloadRec.targetName : undefined,
+                sheriffName: typeof payloadRec?.sheriffName === 'string' ? payloadRec.sheriffName : undefined,
+              });
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
+            } else if (
+              msg.type === 'sabotage:cleared' ||
+              msg.type === 'visual:task' ||
+              msg.type === 'shield:deployed' ||
+              msg.type === 'meeting:verdict' ||
+              msg.type === 'game:ended'
+            ) {
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
             } else if (msg.type === 'mission:started') {
               setMissionStartedTrigger((n) => n + 1);
+              setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
             } else if (msg.type === 'player:removed') {
               closedManually = true;
               haptics.notify('warning');
@@ -645,6 +694,7 @@ export default function App() {
       <HostDashboard
         state={hostState}
         hostToken={hostToken}
+        hostEvent={hostEvent}
         onUpdateState={setHostState}
         onExitHost={() => {
           setHostToken(null);
@@ -665,6 +715,8 @@ export default function App() {
         meetingAlertTrigger={meetingAlertTrigger}
         sabotageAlertTrigger={sabotageAlertTrigger}
         missionStartedTrigger={missionStartedTrigger}
+        shieldBlockedEvent={shieldBlockedEvent}
+        sheriffActionEvent={sheriffActionEvent}
         onUpdateState={setPlayerState}
         onLeaveSession={() => {
           clearSavedPlayerSession();

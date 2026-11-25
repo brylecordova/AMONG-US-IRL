@@ -12,6 +12,8 @@ import {
   Fuel,
   Gauge,
   Grid3x3,
+  Map as MapIcon,
+  Monitor,
   Siren,
   ShieldCheck,
   Trash2,
@@ -22,11 +24,14 @@ import {
 import {
   buildMeetingQrPayload,
   buildPlayerQrPayload,
+  buildStationQrPayload,
   buildTaskQrPayload,
   PlayerColorDef,
   PlayerColorId,
   SkeldTaskDef,
   SkeldTaskId,
+  StationDef,
+  StationId,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { QrCodeImg } from './QrCodeImg';
@@ -614,6 +619,111 @@ export const PrintedEmergencyQrCard: React.FC<{
             'repeating-linear-gradient(135deg, #EF4444 0px, #EF4444 12px, #FACC15 12px, #FACC15 24px)',
         }}
       />
+    </div>
+  );
+};
+
+const STATION_CARD_META: Record<
+  StationId,
+  {
+    Icon: React.FC<{ className?: string }>;
+    borderClass: string;
+    softBg: string;
+    darkHex: string;
+    badgeLabel: string;
+  }
+> = {
+  'admin-table': {
+    Icon: MapIcon,
+    borderClass: 'border-emerald-600',
+    softBg: '#ECFDF5',
+    darkHex: '#064E3B',
+    badgeLabel: 'SECTOR RADAR · 12S',
+  },
+  'security-cams': {
+    Icon: Monitor,
+    borderClass: 'border-cyan-600',
+    softBg: '#ECFEFF',
+    darkHex: '#164E63',
+    badgeLabel: 'CAM FEED · LIVE LOGS',
+  },
+  'vent-relay': {
+    Icon: Wind,
+    borderClass: 'border-red-600',
+    softBg: '#FEF2F2',
+    darkHex: '#7F1D1D',
+    badgeLabel: 'VENT HATCH · -6S COOLDOWN',
+  },
+};
+
+export const PrintedStationQrCard: React.FC<{
+  sessionCode: string;
+  station: StationDef;
+  hideManualCodes: boolean;
+}> = ({ sessionCode, station, hideManualCodes }) => {
+  const meta = STATION_CARD_META[station.id];
+  const Icon = meta.Icon;
+
+  return (
+    <div
+      className={`print-card rounded-2xl border-[3px] ${meta.borderClass} overflow-hidden flex flex-col text-slate-900 shadow-sm`}
+      style={{ backgroundColor: meta.softBg }}
+    >
+      <div
+        className="px-4 py-3 flex items-center justify-between gap-2 border-b border-black/10"
+        style={{ backgroundColor: '#FFFFFF' }}
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-white shadow-sm"
+            style={{ backgroundColor: station.accentHex }}
+          >
+            <Icon className="w-5 h-5" />
+          </div>
+          <div className="min-w-0 text-left">
+            <div className="font-display text-xl font-bold leading-none text-slate-900 truncate">
+              {station.name}
+            </div>
+            <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 mt-1">
+              {station.room} · STATION TERMINAL
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-4 flex-1 flex flex-col items-center justify-center gap-2.5">
+        <div
+          className="relative p-1.5 rounded-xl bg-white border-2 shadow-xs"
+          style={{ borderColor: station.accentHex }}
+        >
+          <div className="w-[164px] h-[164px] print:w-[216px] print:h-[216px]">
+            <QrCodeImg
+              value={buildStationQrPayload(sessionCode, station.id)}
+              renderSize={360}
+              responsive
+              darkColor={meta.darkHex}
+              alt={`${station.name} QR`}
+              className="!p-0.5"
+            />
+          </div>
+        </div>
+
+        <p className="text-[10px] text-slate-700 text-center leading-snug px-1">
+          {station.description}
+        </p>
+
+        <div className="w-full flex items-center justify-between gap-2 pt-1 text-[9px] font-mono font-bold text-slate-600">
+          <span className="truncate">{meta.badgeLabel}</span>
+          {!hideManualCodes && (
+            <span
+              className="px-1.5 py-0.5 rounded text-white shrink-0"
+              style={{ backgroundColor: meta.darkHex }}
+            >
+              {station.shortCode}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

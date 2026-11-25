@@ -231,19 +231,23 @@ export const FixWiringTask: React.FC<TaskProps> = ({ onComplete }) => {
 };
 
 // 2. SWIPE CARD (Common · Admin)
-export const SwipeCardTask: React.FC<TaskProps> = ({ onComplete }) => {
+export const SwipeCardTask: React.FC<TaskProps & { isImpostor?: boolean }> = ({
+  onComplete,
+  isImpostor = false,
+}) => {
   const [cardOut, setCardOut] = useState(false);
   const [status, setStatus] = useState('STEP 1: TAP ID CARD IN WALLET');
-  const [statusTone, setStatusTone] = useState<'neutral' | 'warn' | 'ok'>('neutral');
+  const [statusTone, setStatusTone] = useState<'neutral' | 'warn' | 'ok' | 'impostor'>('neutral');
   const [dragX, setDragX] = useState(0);
   const [maxTrackX, setMaxTrackX] = useState(180);
   const [dragging, setDragging] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const startTimeRef = useRef<number>(0);
   const startXRef = useRef<number>(0);
   const trackRef = useRef<HTMLDivElement>(null);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (!cardOut || !trackRef.current) return;
+    if (!cardOut || verifying || !trackRef.current) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const maxW = Math.max(40, trackRef.current.clientWidth - 124);
     setMaxTrackX(maxW);
@@ -263,7 +267,7 @@ export const SwipeCardTask: React.FC<TaskProps> = ({ onComplete }) => {
   };
 
   const handlePointerUp = () => {
-    if (!dragging || !trackRef.current) return;
+    if (!dragging || verifying || !trackRef.current) return;
     setDragging(false);
     const maxW = Math.max(40, trackRef.current.clientWidth - 124);
     const elapsed = performance.now() - startTimeRef.current;
@@ -283,7 +287,14 @@ export const SwipeCardTask: React.FC<TaskProps> = ({ onComplete }) => {
       setStatus('TOO SLOW — SWIPE IN ONE SMOOTH MOTION');
       setStatusTone('warn');
       setDragX(0);
+    } else if (isImpostor) {
+      setVerifying(true);
+      setStatus('⚠ ID CHIP OVERRIDE — IMPOSTOR SIGNATURE');
+      setStatusTone('impostor');
+      soundEngine.playScanWarning();
+      setTimeout(onComplete, 1800);
     } else {
+      setVerifying(true);
       setStatus('ACCEPTED. THANK YOU.');
       setStatusTone('ok');
       soundEngine.playTaskSuccess();
@@ -294,17 +305,31 @@ export const SwipeCardTask: React.FC<TaskProps> = ({ onComplete }) => {
   const progressPct = Math.min(100, Math.round((dragX / Math.max(1, maxTrackX)) * 100));
 
   return (
-    <div className="bg-[#1B212D] border-2 border-slate-700 rounded-xl p-4 space-y-4 select-none">
+    <div
+      className={`border-2 rounded-xl p-4 space-y-4 select-none transition-colors ${
+        statusTone === 'impostor'
+          ? 'bg-[#28080D] border-red-500 shadow-[0_0_24px_rgba(239,68,68,0.45)]'
+          : 'bg-[#1B212D] border-slate-700'
+      }`}
+    >
       {/* Top: Admin Card Reader Console */}
       <div className="bg-slate-900 border-2 border-slate-700 rounded-xl p-3 space-y-3 shadow-inner">
-        <div className="bg-slate-950 border-2 border-slate-700 rounded-lg px-3 py-2.5 flex items-center justify-between gap-2">
+        <div
+          className={`border-2 rounded-lg px-3 py-2.5 flex items-center justify-between gap-2 transition-colors ${
+            statusTone === 'impostor'
+              ? 'bg-red-950/90 border-red-500'
+              : 'bg-slate-950 border-slate-700'
+          }`}
+        >
           <span
             className={`font-mono text-xs font-bold tracking-wide ${
-              statusTone === 'ok'
-                ? 'text-emerald-400'
-                : statusTone === 'warn'
-                  ? 'text-amber-400'
-                  : 'text-cyan-300'
+              statusTone === 'impostor'
+                ? 'text-red-300 animate-pulse'
+                : statusTone === 'ok'
+                  ? 'text-emerald-400'
+                  : statusTone === 'warn'
+                    ? 'text-amber-400'
+                    : 'text-cyan-300'
             }`}
           >
             {status}
@@ -312,7 +337,9 @@ export const SwipeCardTask: React.FC<TaskProps> = ({ onComplete }) => {
           <div className="flex items-center gap-1.5 shrink-0">
             <span
               className={`w-3 h-3 rounded-full border border-black/50 ${
-                statusTone === 'warn' ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-red-950'
+                statusTone === 'warn' || statusTone === 'impostor'
+                  ? 'bg-red-500 shadow-[0_0_8px_#ef4444]'
+                  : 'bg-red-950'
               }`}
             />
             <span

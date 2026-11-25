@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import {
+  Award,
   Check,
+  Clock,
   Copy,
   Download,
+  Flame,
+  Monitor,
   Printer,
   QrCode,
   Radio,
@@ -13,10 +17,12 @@ import {
   Sliders,
   Smartphone,
   Trash2,
+  Trophy,
   Upload,
   Users,
   Volume2,
   VolumeX,
+  Wind,
   X,
   ZapOff,
 } from 'lucide-react';
@@ -27,27 +33,31 @@ import {
   HostGameState,
   PLAYER_COLORS,
   SKELD_TASKS,
+  STATION_CARDS,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { GalacticBackdrop } from './GalacticBackdrop';
 import {
   PrintedEmergencyQrCard,
   PrintedPlayerBadgeCard,
+  PrintedStationQrCard,
   PrintedTaskQrCard,
 } from './PrintedQrCards';
 import { QrCodeImg } from './QrCodeImg';
 import { SmoothSlider } from './SmoothSlider';
+import { TvSpectatorView } from './TvSpectatorView';
 import { soundEngine } from '../utils/sound';
 
 interface HostDashboardProps {
   state: HostGameState;
   hostToken: string;
+  hostEvent?: { seq: number; type: string; payload?: Record<string, unknown> } | null;
   onUpdateState: (next: HostGameState) => void;
   onExitHost: () => void;
 }
 
 type HostTab = 'CONTROL' | 'PRINT' | 'RULES';
-type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'MEETING';
+type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'STATIONS' | 'MEETING';
 
 interface ApkStatusInfo {
   available: boolean;
@@ -62,11 +72,13 @@ interface ApkStatusInfo {
 export const HostDashboard: React.FC<HostDashboardProps> = ({
   state,
   hostToken,
+  hostEvent,
   onUpdateState,
   onExitHost,
 }) => {
   const [activeTab, setActiveTab] = useState<HostTab>('CONTROL');
   const [printFilter, setPrintFilter] = useState<PrintFilter>('ALL');
+  const [showTvMode, setShowTvMode] = useState(false);
   const [urlInput, setUrlInput] = useState(state.publicUrl);
   const [urlSaved, setUrlSaved] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -75,6 +87,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [muted, setMuted] = useState(soundEngine.isMuted());
   const printSheetRef = React.useRef<HTMLDivElement | null>(null);
   const apkInputRef = React.useRef<HTMLInputElement | null>(null);
+  const lastHandledEventSeqRef = React.useRef<number>(0);
 
   const [apkStatus, setApkStatus] = useState<ApkStatusInfo | null>(null);
   const [apkLoading, setApkLoading] = useState(false);
@@ -109,6 +122,91 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectedRejoinPlayer]);
+
+  useEffect(() => {
+    if (!hostEvent || hostEvent.seq === lastHandledEventSeqRef.current) return;
+    lastHandledEventSeqRef.current = hostEvent.seq;
+    if (muted) return;
+
+    const voiceEnabled = Boolean(state.settings.hostVoiceAnnouncer);
+    const payload = hostEvent.payload || {};
+
+    switch (hostEvent.type) {
+      case 'mission:started':
+        soundEngine.playClick();
+        soundEngine.speakHostCue('Mission launched. Crewmates, complete your tasks.', voiceEnabled);
+        break;
+      case 'sabotage:alert': {
+        const kind = payload.kind;
+        if (kind === 'REACTOR') {
+          soundEngine.playMeltdownAlarm();
+          soundEngine.speakHostCue('Warning! Critical Reactor meltdown.', voiceEnabled);
+        } else if (kind === 'O2') {
+          soundEngine.playMeltdownAlarm();
+          soundEngine.speakHostCue('Warning! Critical oxygen depletion.', voiceEnabled);
+        } else {
+          soundEngine.playSabotageAlarm();
+          soundEngine.speakHostCue('Ship sabotage detected.', voiceEnabled);
+        }
+        break;
+      }
+      case 'sabotage:cleared':
+        soundEngine.playTaskSuccess();
+        soundEngine.speakHostCue('Crisis stabilized.', voiceEnabled);
+        break;
+      case 'meeting:alert':
+        soundEngine.playEmergencyAlarm();
+        if (payload.reason === 'BODY_REPORTED') {
+          soundEngine.speakHostCue('Dead body reported! Gather at the cafeteria table.', voiceEnabled);
+        } else {
+          soundEngine.speakHostCue('Emergency meeting called! Gather at the table.', voiceEnabled);
+        }
+        break;
+      case 'shield:blocked':
+        soundEngine.playShieldBlock();
+        soundEngine.speakHostCue('Guardian shield deflected an attack!', voiceEnabled);
+        break;
+      case 'sheriff:action': {
+        const hit = Boolean(payload.hit);
+        soundEngine.playSheriffShot(hit);
+        soundEngine.speakHostCue(
+          hit ? 'Sheriff eliminated an Impostor!' : 'Sheriff misfired!',
+          voiceEnabled,
+        );
+        break;
+      }
+      case 'meeting:verdict': {
+        if (payload.ejected) {
+          soundEngine.playEjectionWhoosh();
+        }
+        const msg =
+          typeof payload.verdictMessage === 'string' && payload.verdictMessage
+            ? payload.verdictMessage
+            : 'No one was ejected.';
+        soundEngine.speakHostCue(msg, voiceEnabled);
+        break;
+      }
+      case 'game:ended': {
+        const winner = payload.winner;
+        if (winner === 'JESTER') {
+          soundEngine.playJesterWin();
+          soundEngine.speakHostCue('Jester solo victory!', voiceEnabled);
+        } else if (winner === 'CREWMATES') {
+          soundEngine.playVictory();
+          soundEngine.speakHostCue('Crewmates victory!', voiceEnabled);
+        } else {
+          soundEngine.playDefeat();
+          soundEngine.speakHostCue('Impostors victory!', voiceEnabled);
+        }
+        break;
+      }
+      case 'visual:task':
+        soundEngine.playTaskSuccess();
+        break;
+      default:
+        break;
+    }
+  }, [hostEvent, muted, state.settings.hostVoiceAnnouncer]);
 
   const handleCopyRejoinUrl = async () => {
     if (!rejoinQrUrl) return;
@@ -327,7 +425,15 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     printFilter === 'PLAYERS_ALL' ||
     printFilter === 'PLAYERS_JOINED';
   const showTasksSection = printFilter === 'ALL' || printFilter === 'TASKS';
+  const showStationsSection = printFilter === 'ALL' || printFilter === 'STATIONS';
   const showMeetingSection = printFilter === 'ALL' || printFilter === 'MEETING';
+
+  const specialRoleSlotsTotal =
+    state.settings.impostorCount +
+    (state.settings.investigatorCount ?? 1) +
+    (state.settings.sheriffCount ?? 1) +
+    (state.settings.guardianAngelCount ?? 1) +
+    (state.settings.jesterCount ?? 0);
 
   const collectDocumentCss = () => {
     const chunks: string[] = [];
@@ -540,6 +646,15 @@ ${compiledCss}
         <div className="order-2 sm:order-3 flex items-center gap-2.5 shrink-0">
           <button
             type="button"
+            onClick={() => setShowTvMode(true)}
+            className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/35 text-cyan-200 font-semibold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors"
+            title="Launch spoiler-free Big-Screen TV Spectator Mode"
+          >
+            <Monitor className="w-4 h-4" />
+            <span>TV Mode</span>
+          </button>
+          <button
+            type="button"
             onClick={toggleMute}
             className="min-w-[40px] min-h-[40px] rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300"
             aria-label={muted ? 'Unmute audio' : 'Mute audio'}
@@ -572,6 +687,19 @@ ${compiledCss}
           )}
         </div>
       </header>
+
+      {showTvMode && (
+        <TvSpectatorView
+          state={state}
+          muted={muted}
+          busy={busy}
+          onToggleMute={toggleMute}
+          onExitTv={() => setShowTvMode(false)}
+          onStartMission={() => callHostApi('start')}
+          onStartDiscussion={() => callHostApi('start-discussion')}
+          onResetLobby={() => callHostApi('reset')}
+        />
+      )}
 
       {errorMsg && (
         <div className="no-print relative z-20 mx-auto mt-4 max-w-4xl w-full px-6">
@@ -735,7 +863,11 @@ ${compiledCss}
                           {state.phase === 'PLAYING' && 'Mission Active — Crew Telemetry'}
                           {state.phase === 'MEETING' && 'Emergency Meeting In Progress'}
                           {state.phase === 'ENDED' &&
-                            (state.winner === 'CREWMATES' ? 'Victory — Crewmates Win' : 'Defeat — Impostors Win')}
+                            (state.winner === 'JESTER'
+                              ? 'Chaos — Jester Solo Victory'
+                              : state.winner === 'CREWMATES'
+                                ? 'Victory — Crewmates Win'
+                                : 'Defeat — Impostors Win')}
                         </motion.h2>
                       </AnimatePresence>
                       <p className="text-xs text-slate-400 mt-1 tabular-nums">
@@ -743,8 +875,11 @@ ${compiledCss}
                         {state.settings.impostorCount === 2
                           ? '2 Impostors (1 Shapeshifter)'
                           : '1 Impostor'}{' '}
-                        · {state.settings.investigatorCount} Investigator
-                        {state.settings.investigatorCount === 1 ? '' : 's'}
+                        · {state.settings.investigatorCount ?? 1} Inv · {state.settings.sheriffCount ?? 1} Sheriff ·{' '}
+                        {state.settings.guardianAngelCount ?? 1} Angel
+                        {(state.settings.jesterCount ?? 0) > 0
+                          ? ` · ${state.settings.jesterCount} Jester`
+                          : ''}
                       </p>
                     </div>
 
@@ -790,31 +925,56 @@ ${compiledCss}
                         initial={{ opacity: 0, y: -8 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
-                        className="bg-amber-500/15 border border-amber-400/50 rounded-xl p-4 flex items-center gap-3"
+                        className={`rounded-xl p-4 flex items-center gap-3 border ${
+                          state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                            ? 'bg-red-500/20 border-red-400/60'
+                            : 'bg-amber-500/15 border-amber-400/50'
+                        }`}
                       >
                         <motion.div
                           animate={{ scale: [1, 1.14, 1], rotate: [0, -6, 6, 0] }}
                           transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
                           className="shrink-0"
                         >
-                          {state.activeSabotage.kind === 'BLACKOUT' ? (
+                          {state.activeSabotage.kind === 'REACTOR' ? (
+                            <Flame className="w-6 h-6 text-red-300" />
+                          ) : state.activeSabotage.kind === 'O2' ? (
+                            <Wind className="w-6 h-6 text-red-300" />
+                          ) : state.activeSabotage.kind === 'BLACKOUT' ? (
                             <ZapOff className="w-6 h-6 text-amber-300" />
                           ) : (
                             <Radio className="w-6 h-6 text-amber-300" />
                           )}
                         </motion.div>
-                        <div>
-                          <div className="font-display text-xl font-bold text-amber-200">
-                            {state.activeSabotage.kind === 'BLACKOUT'
-                              ? 'SABOTAGE: POWER BLACKOUT'
-                              : 'SABOTAGE: COMMS SIGNAL JAM'}
+                        <div className="flex-1 min-w-0">
+                          <div
+                            className={`font-display text-xl font-bold ${
+                              state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                                ? 'text-red-200'
+                                : 'text-amber-200'
+                            }`}
+                          >
+                            {state.activeSabotage.kind === 'REACTOR' && 'CRITICAL SABOTAGE: REACTOR MELTDOWN'}
+                            {state.activeSabotage.kind === 'O2' && 'CRITICAL SABOTAGE: O2 DEPLETION'}
+                            {state.activeSabotage.kind === 'BLACKOUT' && 'SABOTAGE: POWER BLACKOUT'}
+                            {state.activeSabotage.kind === 'SIGNAL_JAM' && 'SABOTAGE: COMMS SIGNAL JAM'}
                           </div>
-                          <div className="text-xs text-amber-100/80 mt-0.5">
-                            {state.activeSabotage.kind === 'BLACKOUT'
-                              ? `All tasks are locked until an alive player scans and completes Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} — even if already completed or unassigned.`
-                              : `Emergency Meeting button${state.settings.hideManualCodes ? '' : ' (EMRG)'} is disabled for 60 seconds.`}
+                          <div className="text-xs text-slate-200/85 mt-0.5">
+                            {state.activeSabotage.kind === 'REACTOR' &&
+                              `Complete Start Reactor${state.settings.hideManualCodes ? '' : ' (RCT9)'} + Unlock Manifolds${state.settings.hideManualCodes ? '' : ' (MNF1)'} within 15s (${(state.activeSabotage.clearedStations || []).length}/2 stabilized).`}
+                            {state.activeSabotage.kind === 'O2' &&
+                              `Complete Clean O2 Filter${state.settings.hideManualCodes ? '' : ' (OXY6)'} + Empty Chute${state.settings.hideManualCodes ? '' : ' (GRB3)'} within 15s (${(state.activeSabotage.clearedStations || []).length}/2 stabilized).`}
+                            {state.activeSabotage.kind === 'BLACKOUT' &&
+                              `All tasks are locked until an alive player scans and completes Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} — even if already completed or unassigned.`}
+                            {state.activeSabotage.kind === 'SIGNAL_JAM' &&
+                              `Emergency Meeting button${state.settings.hideManualCodes ? '' : ' (EMRG)'} is disabled for 60 seconds.`}
                           </div>
                         </div>
+                        {state.activeSabotage.expiresAt && (
+                          <div className="font-mono text-lg font-bold text-white tabular-nums px-2.5 py-1 rounded-lg bg-black/40 border border-white/15 shrink-0">
+                            {Math.max(0, Math.ceil((state.activeSabotage.expiresAt - state.serverTime) / 1000))}s
+                          </div>
+                        )}
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -894,16 +1054,25 @@ ${compiledCss}
                                         </span>
                                       </div>
                                       <div className="flex items-center gap-1 flex-wrap justify-end">
-                                        {voters.map((v) => (
-                                          <span
-                                            key={v.playerId}
-                                            title={v.name}
-                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
-                                          >
-                                            <CrewmateAvatar color={v.color} size={16} />
-                                            <span>{v.name}</span>
-                                          </span>
-                                        ))}
+                                        {voters.map((v) =>
+                                          state.settings.anonymousVotes ? (
+                                            <span
+                                              key={v.playerId}
+                                              className="px-2 py-0.5 rounded bg-slate-800 border border-white/10 text-[10px] font-mono text-slate-300"
+                                            >
+                                              Anon
+                                            </span>
+                                          ) : (
+                                            <span
+                                              key={v.playerId}
+                                              title={v.name}
+                                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
+                                            >
+                                              <CrewmateAvatar color={v.color} size={16} />
+                                              <span>{v.name}</span>
+                                            </span>
+                                          ),
+                                        )}
                                       </div>
                                     </motion.div>
                                   );
@@ -913,16 +1082,25 @@ ${compiledCss}
                               <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10">
                                 <span className="text-xs font-semibold text-slate-300">Skipped Vote</span>
                                 <div className="flex items-center gap-1 flex-wrap justify-end">
-                                  {state.meeting.voteBreakdown.skipped.map((v) => (
-                                    <span
-                                      key={v.playerId}
-                                      title={v.name}
-                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
-                                    >
-                                      <CrewmateAvatar color={v.color} size={16} />
-                                      <span>{v.name}</span>
-                                    </span>
-                                  ))}
+                                  {state.meeting.voteBreakdown.skipped.map((v) =>
+                                    state.settings.anonymousVotes ? (
+                                      <span
+                                        key={v.playerId}
+                                        className="px-2 py-0.5 rounded bg-slate-800 border border-white/10 text-[10px] font-mono text-slate-300"
+                                      >
+                                        Anon
+                                      </span>
+                                    ) : (
+                                      <span
+                                        key={v.playerId}
+                                        title={v.name}
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-slate-200"
+                                      >
+                                        <CrewmateAvatar color={v.color} size={16} />
+                                        <span>{v.name}</span>
+                                      </span>
+                                    ),
+                                  )}
                                 </div>
                               </div>
                             )}
@@ -932,22 +1110,88 @@ ${compiledCss}
                     )}
                   </AnimatePresence>
 
-                  {/* End Game Banner */}
+                  {/* End Game Banner, Match Awards & Mission Timeline */}
                   {state.phase === 'ENDED' && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.96 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className={`rounded-xl p-4 border ${
-                        state.winner === 'CREWMATES'
-                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-                          : 'bg-red-500/15 border-red-500/40 text-red-200'
-                      }`}
-                    >
-                      <div className="font-display text-2xl font-bold">
-                        {state.winner === 'CREWMATES' ? 'CREWMATES VICTORY' : 'IMPOSTORS VICTORY'}
-                      </div>
-                      <p className="text-sm mt-1">{state.winReason}</p>
-                    </motion.div>
+                    <div className="space-y-4">
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.96 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`rounded-xl p-4 border ${
+                          state.winner === 'JESTER'
+                            ? 'bg-fuchsia-500/15 border-fuchsia-400/50 text-fuchsia-200'
+                            : state.winner === 'CREWMATES'
+                              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
+                              : 'bg-red-500/15 border-red-500/40 text-red-200'
+                        }`}
+                      >
+                        <div className="font-display text-2xl font-bold">
+                          {state.winner === 'JESTER'
+                            ? 'JESTER SOLO VICTORY'
+                            : state.winner === 'CREWMATES'
+                              ? 'CREWMATES VICTORY'
+                              : 'IMPOSTORS VICTORY'}
+                        </div>
+                        <p className="text-sm mt-1">{state.winReason}</p>
+                      </motion.div>
+
+                      {state.awards.length > 0 && (
+                        <div className="rounded-xl bg-slate-950/60 border border-white/10 p-4 space-y-3">
+                          <div className="text-xs font-mono font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                            <Award className="w-4 h-4" />
+                            <span>Match Awards</span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                            {state.awards.map((award) => (
+                              <div
+                                key={award.id}
+                                className="p-3 rounded-xl bg-slate-900/75 border border-white/10 space-y-1.5"
+                              >
+                                <div className="flex items-center gap-1.5 text-amber-200 font-display font-bold text-base">
+                                  <Trophy className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                                  <span>{award.title}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <CrewmateAvatar color={award.playerColor} size={22} />
+                                  <span className="text-xs font-semibold text-white truncate">
+                                    {award.playerName}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-400 leading-snug">
+                                  {award.description}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {state.timeline.length > 0 && (
+                        <div className="rounded-xl bg-slate-950/60 border border-white/10 p-4 space-y-2.5">
+                          <div className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                            <Clock className="w-4 h-4" />
+                            <span>Mission Timeline</span>
+                          </div>
+                          <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                            {state.timeline.map((ev) => (
+                              <div
+                                key={ev.id}
+                                className="px-3 py-2 rounded-lg bg-slate-900/65 border border-white/5 flex items-start justify-between gap-2 text-xs"
+                              >
+                                <div>
+                                  <div className="font-semibold text-white">{ev.title}</div>
+                                  {ev.detail && (
+                                    <div className="text-[11px] text-slate-400 mt-0.5">{ev.detail}</div>
+                                  )}
+                                </div>
+                                <span className="font-mono text-[11px] text-cyan-300 shrink-0 tabular-nums">
+                                  +{ev.elapsedSec}s
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </motion.div>
 
@@ -1462,7 +1706,7 @@ ${compiledCss}
             <div>
               <h2 className="font-display text-2xl font-bold text-white">Printable QR Studio</h2>
               <p className="text-xs text-slate-400">
-                Print player back badges (for kills, Investigator scans, and body reports) and all 16 Skeld task cards.
+                Print player back badges (for kills, Sheriff/Investigator scans, and body reports), 16 Skeld task cards, and the 3 Station QR terminals.
               </p>
             </div>
 
@@ -1473,6 +1717,7 @@ ${compiledCss}
                   ['PLAYERS_ALL', '12 Suit Back Badges'],
                   ['PLAYERS_JOINED', 'Joined Players Only'],
                   ['TASKS', '16 Skeld Tasks'],
+                  ['STATIONS', '3 Station QRs'],
                   ['MEETING', 'Emergency Button'],
                 ] as Array<[PrintFilter, string]>
               ).map(([id, label]) => (
@@ -1582,11 +1827,36 @@ ${compiledCss}
               </section>
             )}
 
+            {/* 3 Skeld Station Terminals (Admin Map, Security Cams, Vent Relay) */}
+            {showStationsSection && (
+              <section
+                className={`space-y-4 print:space-y-2 ${
+                  showBadgesSection || showTasksSection ? 'print:break-before-page' : ''
+                }`}
+              >
+                <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
+                  Skeld Utility Station Terminals (3 Stations)
+                </h3>
+                <div className="print-block-container grid grid-cols-1 sm:grid-cols-3 gap-4 print:space-y-0">
+                  {STATION_CARDS.map((station) => (
+                    <PrintedStationQrCard
+                      key={station.id}
+                      sessionCode={state.sessionCode}
+                      station={station}
+                      hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Emergency Meeting Cafeteria Button — max-w-sm on screen, crewmate-badge size on print */}
             {showMeetingSection && (
               <section
                 className={`space-y-4 print:space-y-2 ${
-                  showBadgesSection || showTasksSection ? 'print:break-before-page' : ''
+                  showBadgesSection || showTasksSection || showStationsSection
+                    ? 'print:break-before-page'
+                    : ''
                 }`}
               >
                 <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
@@ -1604,9 +1874,9 @@ ${compiledCss}
 
       {/* TAB 3: RULES & BALANCE */}
       {activeTab === 'RULES' && (
-        <main className="no-print relative z-10 max-w-3xl w-full mx-auto p-6">
+        <main className="no-print relative z-10 max-w-4xl w-full mx-auto p-6">
           <div className="bg-[#101726]/84 backdrop-blur-md border border-white/12 rounded-2xl p-6 space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2 className="font-display text-2xl font-bold text-white flex items-center gap-2">
                   <Sliders className="w-5 h-5 text-cyan-400" />
@@ -1614,9 +1884,80 @@ ${compiledCss}
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   {state.phase === 'LOBBY'
-                    ? 'Adjust rules before launching the mission.'
+                    ? 'Supports 4–12 players. Pick a preset or customize special roles and modifiers.'
                     : 'Settings are locked while a mission is active. Reset lobby to modify.'}
                 </p>
+              </div>
+              <div
+                className={`px-3 py-1.5 rounded-lg border font-mono text-xs font-semibold tabular-nums ${
+                  state.players.length > 0 && specialRoleSlotsTotal > state.players.length
+                    ? 'bg-amber-500/15 border-amber-400/50 text-amber-200'
+                    : 'bg-slate-950/70 border-white/10 text-cyan-300'
+                }`}
+              >
+                {specialRoleSlotsTotal} special slots · {state.players.length}/12 joined
+              </div>
+            </div>
+
+            {/* Quick Presets (4-6 Player Default + 7-12 Large Gathering) */}
+            <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
+                  Group Size Presets (4–12 Players Supported)
+                </div>
+                <span className="text-[11px] text-slate-400">One-tap recommended balance</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={state.phase !== 'LOBBY'}
+                  onClick={() =>
+                    updateSettings({
+                      impostorCount: 1,
+                      investigatorCount: 1,
+                      sheriffCount: 1,
+                      guardianAngelCount: 1,
+                      jesterCount: 0,
+                      tasksPerPlayer: 4,
+                      killCooldownSec: 25,
+                      scanCooldownSec: 20,
+                      sabotageCooldownSec: 30,
+                      discussionSec: 30,
+                      votingSec: 60,
+                    })
+                  }
+                  className="p-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-left transition-colors disabled:opacity-55"
+                >
+                  <div className="text-sm font-bold text-cyan-200">4–6 Player Party (Recommended)</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    1 Impostor · 1 Investigator · 1 Sheriff · 1 Guardian Angel · 4 Tasks
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  disabled={state.phase !== 'LOBBY'}
+                  onClick={() =>
+                    updateSettings({
+                      impostorCount: 2,
+                      investigatorCount: 1,
+                      sheriffCount: 1,
+                      guardianAngelCount: 1,
+                      jesterCount: 1,
+                      tasksPerPlayer: 5,
+                      killCooldownSec: 25,
+                      scanCooldownSec: 20,
+                      sabotageCooldownSec: 25,
+                      discussionSec: 40,
+                      votingSec: 75,
+                    })
+                  }
+                  className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-left transition-colors disabled:opacity-55"
+                >
+                  <div className="text-sm font-bold text-white">Large Gathering (7–12 Players)</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    2 Impostors (+Shapeshifter) · 1 Inv · 1 Sheriff · 1 Angel · 1 Jester · 5 Tasks
+                  </div>
+                </button>
               </div>
             </div>
 
@@ -1625,7 +1966,7 @@ ${compiledCss}
               <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
                 <div className="text-sm font-semibold text-white">Impostors</div>
                 <p className="text-xs text-slate-400">
-                  With 2 Impostors, one is automatically designated as the Shapeshifter (reads as Crewmate on Investigator scans).
+                  With 2 Impostors, one is automatically designated as the Shapeshifter (reads as Crewmate on Investigator scans, still caught by Sheriff).
                 </p>
                 <div className="flex gap-2 pt-1">
                   {([1, 2] as const).map((cnt) => (
@@ -1650,7 +1991,32 @@ ${compiledCss}
               <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
                 <div className="text-sm font-semibold text-white">Investigators</div>
                 <p className="text-xs text-slate-400">
-                  Can scan alive players’ back QRs to inspect their suit color and role alignment.
+                  Scan alive players’ back QRs inside Privacy Terminal to inspect role alignment.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  {[0, 1, 2, 3].map((cnt) => (
+                    <button
+                      key={cnt}
+                      type="button"
+                      disabled={state.phase !== 'LOBBY'}
+                      onClick={() => updateSettings({ investigatorCount: cnt })}
+                      className={`flex-1 py-2.5 rounded-lg font-mono text-sm font-bold ${
+                        (state.settings.investigatorCount ?? 1) === cnt
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'bg-slate-800 text-slate-300'
+                      } disabled:opacity-60`}
+                    >
+                      {cnt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sheriff Count */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
+                <div className="text-sm font-semibold text-white">Sheriffs</div>
+                <p className="text-xs text-slate-400">
+                  Eliminates any Impostor (even Shapeshifter) on back QR scan, but misfires &amp; self-eliminates if scanning an innocent Crewmate or Jester.
                 </p>
                 <div className="flex gap-2 pt-1">
                   {[0, 1, 2].map((cnt) => (
@@ -1658,14 +2024,66 @@ ${compiledCss}
                       key={cnt}
                       type="button"
                       disabled={state.phase !== 'LOBBY'}
-                      onClick={() => updateSettings({ investigatorCount: cnt })}
+                      onClick={() => updateSettings({ sheriffCount: cnt })}
                       className={`flex-1 py-2.5 rounded-lg font-mono text-sm font-bold ${
-                        state.settings.investigatorCount === cnt
-                          ? 'bg-cyan-500 text-slate-950'
+                        (state.settings.sheriffCount ?? 1) === cnt
+                          ? 'bg-amber-400 text-slate-950'
                           : 'bg-slate-800 text-slate-300'
                       } disabled:opacity-60`}
                     >
                       {cnt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Guardian Angel Count */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-2">
+                <div className="text-sm font-semibold text-white">Guardian Angels</div>
+                <p className="text-xs text-slate-400">
+                  Deploys a 35s Aegis Shield on an alive crewmate (from Terminal or Ghost Deck) that blocks the next kill attempt.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  {[0, 1, 2].map((cnt) => (
+                    <button
+                      key={cnt}
+                      type="button"
+                      disabled={state.phase !== 'LOBBY'}
+                      onClick={() => updateSettings({ guardianAngelCount: cnt })}
+                      className={`flex-1 py-2.5 rounded-lg font-mono text-sm font-bold ${
+                        (state.settings.guardianAngelCount ?? 1) === cnt
+                          ? 'bg-sky-400 text-slate-950'
+                          : 'bg-slate-800 text-slate-300'
+                      } disabled:opacity-60`}
+                    >
+                      {cnt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Jester Count */}
+              <div className="sm:col-span-2 p-4 rounded-xl bg-slate-950/60 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-white">Jester (Neutral Chaos Role)</div>
+                  <p className="text-xs text-slate-400">
+                    Wins solo immediately if voted out in a meeting. Receives cover tasks that do not count toward Crew progress.
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0 min-w-[140px]">
+                  {[0, 1].map((cnt) => (
+                    <button
+                      key={cnt}
+                      type="button"
+                      disabled={state.phase !== 'LOBBY'}
+                      onClick={() => updateSettings({ jesterCount: cnt })}
+                      className={`flex-1 py-2.5 px-4 rounded-lg font-mono text-sm font-bold ${
+                        (state.settings.jesterCount ?? 0) === cnt
+                          ? 'bg-fuchsia-500 text-white'
+                          : 'bg-slate-800 text-slate-300'
+                      } disabled:opacity-60`}
+                    >
+                      {cnt === 0 ? 'Off' : '1 Jester'}
                     </button>
                   ))}
                 </div>
@@ -1761,39 +2179,105 @@ ${compiledCss}
               </div>
             </div>
 
-            <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
-              <div>
-                <div className="text-sm font-semibold text-white">Confirm Ejects</div>
-                <div className="text-xs text-slate-400">
-                  Reveal whether the voted-out player was an Impostor after meetings.
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">Confirm Ejects</div>
+                  <div className="text-xs text-slate-400">
+                    Reveal whether the voted-out player was an Impostor after meetings.
+                  </div>
                 </div>
-              </div>
-              <input
-                type="checkbox"
-                disabled={state.phase !== 'LOBBY'}
-                checked={state.settings.confirmEjects}
-                onChange={(e) => updateSettings({ confirmEjects: e.target.checked })}
-                className="w-5 h-5 accent-cyan-400"
-              />
-            </label>
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={state.settings.confirmEjects}
+                  onChange={(e) => updateSettings({ confirmEjects: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
 
-            <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
-              <div>
-                <div className="text-sm font-semibold text-white">
-                  Hide Manual Codes (Anti-Remote Kill)
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">Anonymous Voting</div>
+                  <div className="text-xs text-slate-400">
+                    Mask voter identities with “Anon” badges during meeting vote reveals.
+                  </div>
                 </div>
-                <div className="text-xs text-slate-400">
-                  Removes manual short codes from printed sheets and disables typing codes in the scanner so Impostors must scan physical QR badges up close.
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={Boolean(state.settings.anonymousVotes)}
+                  onChange={(e) => updateSettings({ anonymousVotes: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">Turbo Mode</div>
+                  <div className="text-xs text-slate-400">
+                    Cuts kill/scan/sabotage cooldowns by 30% and shortens Reactor/O2 timers to 35s.
+                  </div>
                 </div>
-              </div>
-              <input
-                type="checkbox"
-                disabled={state.phase !== 'LOBBY'}
-                checked={Boolean(state.settings.hideManualCodes)}
-                onChange={(e) => updateSettings({ hideManualCodes: e.target.checked })}
-                className="w-5 h-5 accent-cyan-400 shrink-0 ml-4"
-              />
-            </label>
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={Boolean(state.settings.turboMode)}
+                  onChange={(e) => updateSettings({ turboMode: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">Visual Task Alerts</div>
+                  <div className="text-xs text-slate-400">
+                    Broadcasts visual tasks (MedBay Scan, Asteroids, Shields, Chute) to Security &amp; TV.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={state.settings.visualTaskAlerts !== false}
+                  onChange={(e) => updateSettings({ visualTaskAlerts: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">Host Voice Announcer</div>
+                  <div className="text-xs text-slate-400">
+                    Speaks crisp audio cues on the Host/TV speaker for meetings, sabotages, and verdicts.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={state.settings.hostVoiceAnnouncer !== false}
+                  onChange={(e) => updateSettings({ hostVoiceAnnouncer: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-4 rounded-xl bg-slate-950/60 border border-white/10 cursor-pointer">
+                <div className="pr-3">
+                  <div className="text-sm font-semibold text-white">
+                    Hide Manual Codes (Anti-Remote Kill)
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Hides manual short codes from sheets and scanner so physical QR scans are required.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  disabled={state.phase !== 'LOBBY'}
+                  checked={Boolean(state.settings.hideManualCodes)}
+                  onChange={(e) => updateSettings({ hideManualCodes: e.target.checked })}
+                  className="w-5 h-5 accent-cyan-400 shrink-0"
+                />
+              </label>
+            </div>
           </div>
         </main>
       )}

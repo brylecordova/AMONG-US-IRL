@@ -24,6 +24,9 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
   const [stage, setStage] = useState<'SHH' | 'REVEAL'>('SHH');
   const isImpostor = secretRole === 'IMPOSTOR' || secretRole === 'SHAPESHIFTER';
   const isInvestigator = secretRole === 'INVESTIGATOR';
+  const isSheriff = secretRole === 'SHERIFF';
+  const isGuardian = secretRole === 'GUARDIAN_ANGEL';
+  const isJester = secretRole === 'JESTER';
 
   useEffect(() => {
     haptics.impact('light');
@@ -35,22 +38,33 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
 
   useEffect(() => {
     if (stage === 'REVEAL') {
-      soundEngine.playRoleReveal(isImpostor);
-      haptics.impact(isImpostor ? 'heavy' : 'medium');
+      soundEngine.playRoleReveal(isImpostor || isJester);
+      haptics.impact(isImpostor || isSheriff ? 'heavy' : 'medium');
     }
-  }, [stage, isImpostor]);
+  }, [stage, isImpostor, isJester, isSheriff]);
 
   const accentText = isImpostor
     ? 'text-red-500'
-    : isInvestigator
-      ? 'text-cyan-300'
-      : 'text-emerald-400';
+    : isSheriff
+      ? 'text-amber-400'
+      : isInvestigator || isGuardian
+        ? 'text-cyan-300'
+        : isJester
+          ? 'text-fuchsia-400'
+          : 'text-emerald-400';
 
   const glowStyle = isImpostor
     ? 'radial-gradient(circle, rgba(239,68,68,0.38) 0%, rgba(11,15,23,0) 70%)'
-    : isInvestigator
-      ? 'radial-gradient(circle, rgba(34,211,238,0.34) 0%, rgba(11,15,23,0) 70%)'
-      : 'radial-gradient(circle, rgba(52,211,153,0.32) 0%, rgba(11,15,23,0) 70%)';
+    : isSheriff
+      ? 'radial-gradient(circle, rgba(245,158,11,0.35) 0%, rgba(11,15,23,0) 70%)'
+      : isInvestigator || isGuardian
+        ? 'radial-gradient(circle, rgba(34,211,238,0.34) 0%, rgba(11,15,23,0) 70%)'
+        : isJester
+          ? 'radial-gradient(circle, rgba(232,121,249,0.35) 0%, rgba(11,15,23,0) 70%)'
+          : 'radial-gradient(circle, rgba(52,211,153,0.32) 0%, rgba(11,15,23,0) 70%)';
+
+  const displayRole =
+    secretRole === 'GUARDIAN_ANGEL' ? 'GUARDIAN ANGEL' : secretRole;
 
   return (
     <motion.div
@@ -131,9 +145,9 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
                 initial={{ scale: 0.78, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ delay: 0.18, type: 'spring', stiffness: 320, damping: 20 }}
-                className={`font-display text-6xl sm:text-7xl font-bold tracking-wider ${accentText}`}
+                className={`font-display text-5xl sm:text-7xl font-bold tracking-wider ${accentText}`}
               >
-                {secretRole}
+                {displayRole}
               </motion.h1>
             </motion.div>
 
@@ -180,8 +194,14 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
                   'Walk to physical Task QR stations and complete all assignments, or scan fallen bodies to report.'}
                 {secretRole === 'INVESTIGATOR' &&
                   'Complete tasks and tap Scan QR on any alive player’s back to inspect their suit color and alignment.'}
+                {secretRole === 'SHERIFF' &&
+                  'Justice Scan any suspect’s back QR to eliminate an Impostor—but misfiring on an innocent Crewmate or Jester eliminates YOU instead!'}
+                {secretRole === 'GUARDIAN_ANGEL' &&
+                  'Open Terminal to deploy an Aegis Shield on an endangered Crewmate (works both while alive and as a Ghost!) to block an Impostor kill.'}
+                {secretRole === 'JESTER' &&
+                  'Neutral Trickster: Fake tasks and act suspicious enough to get voted out during an Emergency Meeting to win solo!'}
                 {secretRole === 'IMPOSTOR' &&
-                  'Tap Scan QR on an alive Crewmate’s back to eliminate them. Open Terminal to trigger Kill Power or Signal Jam sabotages.'}
+                  'Tap Scan QR on an alive Crewmate’s back to eliminate them. Open Terminal to trigger Power, Comms, Reactor, or O2 sabotages.'}
                 {secretRole === 'SHAPESHIFTER' &&
                   'You are the Shapeshifter Impostor: Investigator scans detect you as CREWMATE! Open Terminal for Sabotages and cooldowns.'}
               </p>

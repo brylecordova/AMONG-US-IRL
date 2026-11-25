@@ -18,6 +18,7 @@ import {
 import {
   advanceSessionTimers,
   agreeVoteNow,
+  castGuardianShield,
   castMeetingVote,
   changePlayerColorInLobby,
   completePlayerTask,
@@ -27,6 +28,7 @@ import {
   kickPlayerFromLobby,
   markPlayerArrived,
   processPlayerBackScan,
+  processStationScan,
   projectForHost,
   projectForPlayer,
   rejoinGameSession,
@@ -36,6 +38,7 @@ import {
   triggerSabotage,
   updateHostPublicUrl,
   updateSessionSettings,
+  useGhostPower,
 } from './server/gameEngine.ts';
 import {
   PLAYER_COLORS,
@@ -43,6 +46,8 @@ import {
   SabotageKind,
   SKELD_TASKS,
   SkeldTaskId,
+  STATION_CARDS,
+  StationId,
 } from './src/shared/skeldData.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -204,7 +209,16 @@ function buildPublicSummary(session: NonNullable<Awaited<ReturnType<typeof getSe
   };
 }
 
-async function broadcastSessionState(sessionCode: string, event?: { type: string; payload?: unknown; targetPlayerId?: string }) {
+interface BroadcastEvent {
+  type: string;
+  payload?: unknown;
+  targetPlayerId?: string;
+}
+
+async function broadcastSessionState(
+  sessionCode: string,
+  event?: BroadcastEvent | BroadcastEvent[],
+) {
   const session = await getSession(sessionCode);
   if (!session) return;
   const group = clientsBySession.get(sessionCode);
@@ -212,6 +226,7 @@ async function broadcastSessionState(sessionCode: string, event?: { type: string
 
   const lanUrls = getLanUrls(PORT);
   const publicSummary = buildPublicSummary(session);
+  const events = event ? (Array.isArray(event) ? event : [event]) : [];
 
   for (const client of group) {
     if (client.ws.readyState !== WebSocket.OPEN) continue;
@@ -226,9 +241,9 @@ async function broadcastSessionState(sessionCode: string, event?: { type: string
       continue;
     }
 
-    if (event) {
-      if (!event.targetPlayerId || event.targetPlayerId === client.playerId) {
-        client.ws.send(JSON.stringify(event));
+    for (const ev of events) {
+      if (!ev.targetPlayerId || ev.targetPlayerId === client.playerId) {
+        client.ws.send(JSON.stringify(ev));
       }
     }
 
@@ -629,7 +644,11 @@ async function main() {
       const code = sanitizeSessionCode(req.params.code);
       const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
       const { kind } = req.body as { kind?: unknown };
-      if (!code || !playerToken || (kind !== 'BLACKOUT' && kind !== 'SIGNAL_JAM')) {
+      if (
+        !code ||
+        !playerToken ||
+        (kind !== 'BLACKOUT' && kind !== 'SIGNAL_JAM' && kind !== 'REACTOR' && kind !== 'O2')
+      ) {
         return res.status(400).json({ error: 'Invalid sabotage request.' });
       }
       const session = await triggerSabotage(code, playerToken, kind as SabotageKind);
@@ -651,18 +670,30 @@ async function main() {
       if (!code || !playerToken || typeof taskId !== 'string' || !SKELD_TASKS.some((t) => t.id === taskId)) {
         return res.status(400).json({ error: 'Invalid task submission.' });
       }
-      const { session, wasCrewTask, powerRestored } = await completePlayerTask(
-        code,
-        playerToken,
-        taskId as SkeldTaskId,
-      );
-      await broadcastSessionState(
-        code,
-        powerRestored ? { type: 'sabotage:cleared', payload: { kind: 'BLACKOUT' } } : undefined,
-      );
+      const {
+        session,
+        wasCrewTask,
+        powerRestored,
+        sabotageCleared,
+        meltdownProgress,
+        visualAlertBroadcast,
+      } = await completePlayerTask(code, playerToken, taskId as SkeldTaskId);
+
+      const events: BroadcastEvent[] = [];
+      if (sabotageCleared) {
+        events.push({ type: 'sabotage:cleared', payload: { kind: sabotageCleared } });
+      }
+      if (visualAlertBroadcast && session.recentVisualAlert) {
+        events.push({ type: 'visual:task', payload: session.recentVisualAlert });
+      }
+
+      await broadcastSessionState(code, events.length > 0 ? events : undefined);
       res.json({
         wasCrewTask,
         powerRestored,
+        sabotageCleared,
+        meltdownProgress,
+        visualAlertBroadcast,
         state: projectForPlayer(session, playerToken),
       });
     } catch (err) {
@@ -684,7 +715,9 @@ async function main() {
         return res.status(400).json({ error: 'Invalid player badge scan.' });
       }
       const validMode =
-        mode === 'KILL' || mode === 'INVESTIGATE' || mode === 'REPORT' ? mode : 'AUTO';
+        mode === 'KILL' || mode === 'INVESTIGATE' || mode === 'SHERIFF' || mode === 'REPORT'
+          ? mode
+          : 'AUTO';
 
       const outcome = await processPlayerBackScan(
         code,
@@ -699,6 +732,50 @@ async function main() {
           targetPlayerId: outcome.victimId,
           payload: { victimName: outcome.victimName, victimColor: outcome.victimColor },
         });
+      } else if (outcome.kind === 'SHIELD_BLOCKED') {
+        await broadcastSessionState(code, {
+          type: 'shield:blocked',
+          payload: {
+            targetId: outcome.targetId,
+            targetName: outcome.targetName,
+            targetColor: outcome.targetColor,
+            guardianId: outcome.guardianId,
+          },
+        });
+      } else if (outcome.kind === 'SHERIFF_KILL') {
+        await broadcastSessionState(code, [
+          {
+            type: 'player:killed',
+            targetPlayerId: outcome.targetId,
+            payload: { victimName: outcome.targetName, victimColor: outcome.targetColor },
+          },
+          {
+            type: 'sheriff:action',
+            payload: {
+              hit: true,
+              targetName: outcome.targetName,
+              targetColor: outcome.targetColor,
+            },
+          },
+        ]);
+      } else if (outcome.kind === 'SHERIFF_MISFIRE') {
+        await broadcastSessionState(code, [
+          {
+            type: 'player:killed',
+            targetPlayerId: outcome.sheriffId,
+            payload: { victimName: outcome.sheriffName, victimColor: outcome.sheriffColor },
+          },
+          {
+            type: 'sheriff:action',
+            payload: {
+              hit: false,
+              sheriffName: outcome.sheriffName,
+              sheriffColor: outcome.sheriffColor,
+              targetName: outcome.targetName,
+              targetColor: outcome.targetColor,
+            },
+          },
+        ]);
       } else if (outcome.kind === 'BODY_REPORTED') {
         await broadcastSessionState(code, {
           type: 'meeting:alert',
@@ -712,37 +789,94 @@ async function main() {
         await broadcastSessionState(code);
       }
 
+      const { session: outcomeSession, ...publicOutcome } = outcome;
       res.json({
-        outcome: {
-          kind: outcome.kind,
-          ...(outcome.kind === 'KILL_EXECUTED'
-            ? { victimName: outcome.victimName, victimColor: outcome.victimColor }
-            : {}),
-          ...(outcome.kind === 'DEAD_BODY_FOUND'
-            ? { victimName: outcome.victimName, victimColor: outcome.victimColor }
-            : {}),
-          ...(outcome.kind === 'BODY_REPORTED'
-            ? { victimName: outcome.victimName, victimColor: outcome.victimColor }
-            : {}),
-          ...(outcome.kind === 'INVESTIGATE_RESULT'
-            ? {
-                targetName: outcome.targetName,
-                targetColor: outcome.targetColor,
-                reportedAlignment: outcome.reportedAlignment,
-              }
-            : {}),
-          ...(outcome.kind === 'ID_CHECK'
-            ? {
-                targetName: outcome.targetName,
-                targetColor: outcome.targetColor,
-                alive: outcome.alive,
-              }
-            : {}),
-        },
-        state: projectForPlayer(outcome.session, playerToken),
+        outcome: publicOutcome,
+        state: projectForPlayer(outcomeSession, playerToken),
       });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Scan action rejected.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/shield', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      const { targetPlayerId } = req.body as { targetPlayerId?: unknown };
+      if (!code || !playerToken || typeof targetPlayerId !== 'string' || !targetPlayerId.trim()) {
+        return res.status(400).json({ error: 'Invalid shield target.' });
+      }
+      const { session, targetName, targetColor } = await castGuardianShield(
+        code,
+        playerToken,
+        targetPlayerId.trim(),
+      );
+      await broadcastSessionState(code, {
+        type: 'shield:deployed',
+        payload: { targetName, targetColor },
+      });
+      res.json({
+        targetName,
+        targetColor,
+        state: projectForPlayer(session, playerToken),
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to deploy Aegis Shield.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/station-scan', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      const { stationId } = req.body as { stationId?: unknown };
+      if (
+        !code ||
+        !playerToken ||
+        typeof stationId !== 'string' ||
+        !STATION_CARDS.some((s) => s.id === stationId)
+      ) {
+        return res.status(400).json({ error: 'Invalid Skeld station terminal.' });
+      }
+
+      const outcome = await processStationScan(code, playerToken, stationId as StationId);
+      if (outcome.kind !== 'VENT_RELAY' || outcome.activated) {
+        await broadcastSessionState(code);
+      }
+
+      const { session: outcomeSession, ...publicOutcome } = outcome;
+      res.json({
+        outcome: publicOutcome,
+        state: projectForPlayer(outcomeSession, playerToken),
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Station scan rejected.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/ghost-power', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      const { power, room } = req.body as { power?: unknown; room?: unknown };
+      if (
+        !code ||
+        !playerToken ||
+        (power !== 'GHOST_PING' && power !== 'GHOST_FLICKER') ||
+        typeof room !== 'string' ||
+        !room.trim()
+      ) {
+        return res.status(400).json({ error: 'Invalid ghost power payload.' });
+      }
+      const { session, message } = await useGhostPower(code, playerToken, power, room);
+      await broadcastSessionState(code);
+      res.json({
+        message,
+        state: projectForPlayer(session, playerToken),
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Ghost power rejected.' });
     }
   });
 
@@ -939,9 +1073,9 @@ async function main() {
     try {
       const codes = await getActiveSessionCodes();
       for (const code of codes) {
-        const changed = await advanceSessionTimers(code);
+        const { changed, event } = await advanceSessionTimers(code);
         if (changed) {
-          await broadcastSessionState(code);
+          await broadcastSessionState(code, event);
         }
       }
     } catch {

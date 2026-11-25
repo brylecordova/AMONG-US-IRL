@@ -6,9 +6,15 @@ import type {
   AssignedTask,
   GamePhase,
   GameSettings,
+  MatchTimelineEvent,
   MeetingStage,
+  PlayerAward,
   PlayerColorId,
+  PlayerMatchStats,
   SecretRole,
+  StationActivityEvent,
+  VisualTaskAlert,
+  WinnerTeam,
 } from '../src/shared/skeldData.ts';
 
 export interface StoredPlayer {
@@ -22,6 +28,12 @@ export interface StoredPlayer {
   assignedTasks: AssignedTask[];
   lastKillAt: number;
   lastScanAt: number;
+  lastShieldAt?: number;
+  lastVentAt?: number;
+  shieldedUntil?: number;
+  shieldedBy?: string;
+  ghostEnergy?: number;
+  stats?: PlayerMatchStats;
   connected: boolean;
 }
 
@@ -61,8 +73,15 @@ export interface StoredSession {
   activeSabotage: ActiveSabotage | null;
   lastSabotageAt: number;
   meeting: StoredMeeting | null;
-  winner: 'CREWMATES' | 'IMPOSTORS' | null;
+  winner: WinnerTeam | null;
   winReason: string | null;
+  missionStartedAt?: number;
+  lastGhostTickAt?: number;
+  jesterEjectedWinnerId?: string | null;
+  activityFeed?: Array<StationActivityEvent & { actorId?: string }>;
+  recentVisualAlert?: VisualTaskAlert | null;
+  timeline?: MatchTimelineEvent[];
+  awards?: PlayerAward[];
   createdAt: number;
   updatedAt: number;
 }
