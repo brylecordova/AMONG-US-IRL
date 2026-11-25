@@ -16,7 +16,6 @@ import {
   Users,
   Volume2,
   VolumeX,
-  Wind,
   ZapOff,
 } from 'lucide-react';
 import {
@@ -249,7 +248,7 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                     initial={{ scale: 0.96, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     className={`rounded-2xl border-2 p-5 flex flex-wrap items-center justify-between gap-4 shadow-2xl ${
-                      state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                      state.activeSabotage.kind === 'REACTOR'
                         ? 'bg-red-950/85 border-red-500 animate-pulse'
                         : 'bg-amber-950/80 border-amber-400'
                     }`}
@@ -257,8 +256,6 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                     <div className="flex items-center gap-4">
                       {state.activeSabotage.kind === 'REACTOR' ? (
                         <Flame className="w-10 h-10 text-red-400 shrink-0" />
-                      ) : state.activeSabotage.kind === 'O2' ? (
-                        <Wind className="w-10 h-10 text-red-400 shrink-0" />
                       ) : state.activeSabotage.kind === 'BLACKOUT' ? (
                         <ZapOff className="w-10 h-10 text-amber-300 shrink-0" />
                       ) : (
@@ -267,15 +264,27 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                       <div>
                         <div className="font-display text-3xl font-bold text-white tracking-wide">
                           {state.activeSabotage.kind === 'REACTOR' && 'CRITICAL: REACTOR MELTDOWN'}
-                          {state.activeSabotage.kind === 'O2' && 'CRITICAL: O2 DEPLETION'}
                           {state.activeSabotage.kind === 'BLACKOUT' && 'SHIP POWER BLACKOUT'}
                           {state.activeSabotage.kind === 'SIGNAL_JAM' && 'COMMS SIGNAL JAMMED'}
                         </div>
                         <div className="text-sm text-slate-200 mt-0.5">
                           {state.activeSabotage.kind === 'REACTOR' &&
-                            `Complete Start Reactor (RCT9) + Unlock Manifolds (MNF1) · ${(state.activeSabotage.clearedStations || []).length}/2 Stabilized`}
-                          {state.activeSabotage.kind === 'O2' &&
-                            `Complete Clean O2 Filter (OXY6) + Empty Chute (GRB3) · ${(state.activeSabotage.clearedStations || []).length}/2 Stabilized`}
+                            (() => {
+                              const holders = state.activeSabotage.reactorHolders || [];
+                              const holdSec =
+                                state.activeSabotage.dualHoldStartedAt && holders.length >= 2
+                                  ? Math.min(
+                                      5,
+                                      Math.max(
+                                        0,
+                                        (effectiveNow - state.activeSabotage.dualHoldStartedAt) / 1000,
+                                      ),
+                                    )
+                                  : 0;
+                              return holders.length >= 2
+                                ? `2/2 Crew Holding Reactor Override — Stabilizing (${holdSec.toFixed(1)}s / 5.0s)!`
+                                : `2 alive players must scan the Reactor Override QR & hold together for 5s (${holders.length}/2 holding).`;
+                            })()}
                           {state.activeSabotage.kind === 'BLACKOUT' &&
                             'Repair Fix Wiring in Electrical to restore ship power.'}
                           {state.activeSabotage.kind === 'SIGNAL_JAM' &&
@@ -285,7 +294,6 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                     </div>
 
                     {(state.activeSabotage.kind === 'REACTOR' ||
-                      state.activeSabotage.kind === 'O2' ||
                       state.activeSabotage.kind === 'SIGNAL_JAM') && (
                       <div className="font-mono text-4xl font-bold text-white tabular-nums px-4 py-2 rounded-xl bg-black/50 border border-white/15">
                         {sabotageLeftSec}s
@@ -336,8 +344,6 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                           normalizeSkeldRoom(state.recentVisualAlert.room) === room;
                         const isCrisisRoom =
                           (state.activeSabotage?.kind === 'REACTOR' && room === 'Reactor') ||
-                          (state.activeSabotage?.kind === 'O2' &&
-                            (room === 'O2' || room === 'Storage')) ||
                           (state.activeSabotage?.kind === 'BLACKOUT' && room === 'Electrical');
 
                         return (
@@ -412,9 +418,7 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                                 ? 'bg-red-950/40 border-red-500/40 text-red-200'
                                 : ev.kind === 'VISUAL'
                                   ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-100'
-                                  : ev.kind === 'GHOST_PING' || ev.kind === 'GHOST_FLICKER'
-                                    ? 'bg-fuchsia-950/35 border-fuchsia-400/40 text-fuchsia-200'
-                                    : 'bg-slate-950/65 border-white/10 text-slate-200'
+                                  : 'bg-slate-950/65 border-white/10 text-slate-200'
                             }`}
                           >
                             <div className="font-semibold">{ev.label}</div>

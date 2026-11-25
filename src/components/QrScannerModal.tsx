@@ -534,7 +534,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
                     setManualCode(e.target.value.toUpperCase());
                     setManualError(null);
                   }}
-                  placeholder="e.g. WIR1, RED, EMRG"
+                  placeholder="e.g. WIR1, RED, EMRG, MELT"
                   className="flex-1 min-w-0 min-h-[44px] px-3.5 rounded-xl bg-slate-950 border border-white/15 font-mono text-sm uppercase text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
                 />
                 <button

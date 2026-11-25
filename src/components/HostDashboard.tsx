@@ -22,7 +22,6 @@ import {
   Users,
   Volume2,
   VolumeX,
-  Wind,
   X,
   ZapOff,
 } from 'lucide-react';
@@ -33,14 +32,13 @@ import {
   HostGameState,
   PLAYER_COLORS,
   SKELD_TASKS,
-  STATION_CARDS,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { GalacticBackdrop } from './GalacticBackdrop';
 import {
   PrintedEmergencyQrCard,
   PrintedPlayerBadgeCard,
-  PrintedStationQrCard,
+  PrintedReactorMeltdownQrCard,
   PrintedTaskQrCard,
 } from './PrintedQrCards';
 import { QrCodeImg } from './QrCodeImg';
@@ -57,7 +55,7 @@ interface HostDashboardProps {
 }
 
 type HostTab = 'CONTROL' | 'PRINT' | 'RULES';
-type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'STATIONS' | 'MEETING';
+type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'REACTOR' | 'MEETING';
 
 interface ApkStatusInfo {
   available: boolean;
@@ -97,6 +95,22 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [apkError, setApkError] = useState<string | null>(null);
   const [selectedRejoinPlayerId, setSelectedRejoinPlayerId] = useState<string | null>(null);
   const [rejoinUrlCopied, setRejoinUrlCopied] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const skewRef = React.useRef(state.serverTime - Date.now());
+
+  useEffect(() => {
+    skewRef.current = state.serverTime - Date.now();
+  }, [state.serverTime]);
+
+  useEffect(() => {
+    if (!state.activeSabotage?.expiresAt) return;
+    setNowMs(Date.now());
+    const intervalMs = state.activeSabotage.kind === 'REACTOR' ? 150 : 500;
+    const timer = window.setInterval(() => setNowMs(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [state.activeSabotage?.kind, state.activeSabotage?.expiresAt]);
+
+  const effectiveNow = nowMs + skewRef.current;
 
   const joinUrl = `${state.publicUrl}/?join=${state.sessionCode}`;
   const apkDownloadUrl = `${state.publicUrl}/download/among-us-irl.apk`;
@@ -141,9 +155,6 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
         if (kind === 'REACTOR') {
           soundEngine.playMeltdownAlarm();
           soundEngine.speakHostCue('Warning! Critical Reactor meltdown.', voiceEnabled);
-        } else if (kind === 'O2') {
-          soundEngine.playMeltdownAlarm();
-          soundEngine.speakHostCue('Warning! Critical oxygen depletion.', voiceEnabled);
         } else {
           soundEngine.playSabotageAlarm();
           soundEngine.speakHostCue('Ship sabotage detected.', voiceEnabled);
@@ -425,7 +436,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     printFilter === 'PLAYERS_ALL' ||
     printFilter === 'PLAYERS_JOINED';
   const showTasksSection = printFilter === 'ALL' || printFilter === 'TASKS';
-  const showStationsSection = printFilter === 'ALL' || printFilter === 'STATIONS';
+  const showReactorSection = printFilter === 'ALL' || printFilter === 'REACTOR';
   const showMeetingSection = printFilter === 'ALL' || printFilter === 'MEETING';
 
   const specialRoleSlotsTotal =
@@ -926,7 +937,7 @@ ${compiledCss}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -8 }}
                         className={`rounded-xl p-4 flex items-center gap-3 border ${
-                          state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                          state.activeSabotage.kind === 'REACTOR'
                             ? 'bg-red-500/20 border-red-400/60'
                             : 'bg-amber-500/15 border-amber-400/50'
                         }`}
@@ -938,8 +949,6 @@ ${compiledCss}
                         >
                           {state.activeSabotage.kind === 'REACTOR' ? (
                             <Flame className="w-6 h-6 text-red-300" />
-                          ) : state.activeSabotage.kind === 'O2' ? (
-                            <Wind className="w-6 h-6 text-red-300" />
                           ) : state.activeSabotage.kind === 'BLACKOUT' ? (
                             <ZapOff className="w-6 h-6 text-amber-300" />
                           ) : (
@@ -949,21 +958,18 @@ ${compiledCss}
                         <div className="flex-1 min-w-0">
                           <div
                             className={`font-display text-xl font-bold ${
-                              state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                              state.activeSabotage.kind === 'REACTOR'
                                 ? 'text-red-200'
                                 : 'text-amber-200'
                             }`}
                           >
                             {state.activeSabotage.kind === 'REACTOR' && 'CRITICAL SABOTAGE: REACTOR MELTDOWN'}
-                            {state.activeSabotage.kind === 'O2' && 'CRITICAL SABOTAGE: O2 DEPLETION'}
                             {state.activeSabotage.kind === 'BLACKOUT' && 'SABOTAGE: POWER BLACKOUT'}
                             {state.activeSabotage.kind === 'SIGNAL_JAM' && 'SABOTAGE: COMMS SIGNAL JAM'}
                           </div>
                           <div className="text-xs text-slate-200/85 mt-0.5">
                             {state.activeSabotage.kind === 'REACTOR' &&
-                              `Complete Start Reactor${state.settings.hideManualCodes ? '' : ' (RCT9)'} + Unlock Manifolds${state.settings.hideManualCodes ? '' : ' (MNF1)'} within 15s (${(state.activeSabotage.clearedStations || []).length}/2 stabilized).`}
-                            {state.activeSabotage.kind === 'O2' &&
-                              `Complete Clean O2 Filter${state.settings.hideManualCodes ? '' : ' (OXY6)'} + Empty Chute${state.settings.hideManualCodes ? '' : ' (GRB3)'} within 15s (${(state.activeSabotage.clearedStations || []).length}/2 stabilized).`}
+                              `2 alive players must scan Reactor Override${state.settings.hideManualCodes ? '' : ' (MELT)'} and hold together for 5s (${(state.activeSabotage.reactorHolders || []).length}/2 holding).`}
                             {state.activeSabotage.kind === 'BLACKOUT' &&
                               `All tasks are locked until an alive player scans and completes Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} — even if already completed or unassigned.`}
                             {state.activeSabotage.kind === 'SIGNAL_JAM' &&
@@ -972,7 +978,7 @@ ${compiledCss}
                         </div>
                         {state.activeSabotage.expiresAt && (
                           <div className="font-mono text-lg font-bold text-white tabular-nums px-2.5 py-1 rounded-lg bg-black/40 border border-white/15 shrink-0">
-                            {Math.max(0, Math.ceil((state.activeSabotage.expiresAt - state.serverTime) / 1000))}s
+                            {Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNow) / 1000))}s
                           </div>
                         )}
                       </motion.div>
@@ -1706,7 +1712,7 @@ ${compiledCss}
             <div>
               <h2 className="font-display text-2xl font-bold text-white">Printable QR Studio</h2>
               <p className="text-xs text-slate-400">
-                Print player back badges (for kills, Sheriff/Investigator scans, and body reports), 16 Skeld task cards, and the 3 Station QR terminals.
+                Print player back badges (for kills, Sheriff/Investigator scans, and body reports), 16 Skeld task cards, the Reactor Meltdown Override QR, and Emergency Button.
               </p>
             </div>
 
@@ -1717,7 +1723,7 @@ ${compiledCss}
                   ['PLAYERS_ALL', '12 Suit Back Badges'],
                   ['PLAYERS_JOINED', 'Joined Players Only'],
                   ['TASKS', '16 Skeld Tasks'],
-                  ['STATIONS', '3 Station QRs'],
+                  ['REACTOR', 'Reactor Override QR'],
                   ['MEETING', 'Emergency Button'],
                 ] as Array<[PrintFilter, string]>
               ).map(([id, label]) => (
@@ -1827,26 +1833,20 @@ ${compiledCss}
               </section>
             )}
 
-            {/* 3 Skeld Station Terminals (Admin Map, Security Cams, Vent Relay) */}
-            {showStationsSection && (
+            {/* Reactor Meltdown Override Station (Impostor Triggers / 2 Crew Hold 5s) */}
+            {showReactorSection && (
               <section
                 className={`space-y-4 print:space-y-2 ${
                   showBadgesSection || showTasksSection ? 'print:break-before-page' : ''
                 }`}
               >
                 <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
-                  Skeld Utility Station Terminals (3 Stations)
+                  Reactor Meltdown Override QR (Hidden from Task Lists)
                 </h3>
-                <div className="print-block-container grid grid-cols-1 sm:grid-cols-3 gap-4 print:space-y-0">
-                  {STATION_CARDS.map((station) => (
-                    <PrintedStationQrCard
-                      key={station.id}
-                      sessionCode={state.sessionCode}
-                      station={station}
-                      hideManualCodes={Boolean(state.settings.hideManualCodes)}
-                    />
-                  ))}
-                </div>
+                <PrintedReactorMeltdownQrCard
+                  sessionCode={state.sessionCode}
+                  hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                />
               </section>
             )}
 
@@ -1854,7 +1854,7 @@ ${compiledCss}
             {showMeetingSection && (
               <section
                 className={`space-y-4 print:space-y-2 ${
-                  showBadgesSection || showTasksSection || showStationsSection
+                  showBadgesSection || showTasksSection || showReactorSection
                     ? 'print:break-before-page'
                     : ''
                 }`}
@@ -2216,7 +2216,7 @@ ${compiledCss}
                 <div className="pr-3">
                   <div className="text-sm font-semibold text-white">Turbo Mode</div>
                   <div className="text-xs text-slate-400">
-                    Cuts kill/scan/sabotage cooldowns by 30% and shortens Reactor/O2 timers to 35s.
+                    Cuts kill/scan/sabotage cooldowns by 30% and shortens Reactor Meltdown timer to 35s.
                   </div>
                 </div>
                 <input
@@ -2232,7 +2232,7 @@ ${compiledCss}
                 <div className="pr-3">
                   <div className="text-sm font-semibold text-white">Visual Task Alerts</div>
                   <div className="text-xs text-slate-400">
-                    Broadcasts visual tasks (MedBay Scan, Asteroids, Shields, Chute) to Security &amp; TV.
+                    Broadcasts visual tasks (MedBay Scan, Asteroids, Shields, Chute) to players &amp; TV.
                   </div>
                 </div>
                 <input

@@ -164,108 +164,110 @@ export default function App() {
     const hasUrlJoin = /^[A-Z0-9]{4,8}$/.test(urlJoin);
     const hasUrlRejoin = /^[A-Z0-9]{4,10}$/.test(urlRejoin);
 
-    if (hasUrlJoin || hasUrlRejoin) {
-      try {
-        window.history.replaceState({}, '', window.location.pathname);
-      } catch {
-        // Ignore history restriction
-      }
-    }
-
     const restore = async () => {
-      // 1. Explicit Rejoin QR deep-link (?join=CODE&rejoin=CODE)
-      if (hasUrlJoin && hasUrlRejoin) {
-        try {
-          const res = await fetch(`/api/sessions/${urlJoin}/rejoin`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rejoinCode: urlRejoin }),
-          });
-          const data = await res.json();
-          if (cancelled) return;
-          if (res.ok && data.state && data.playerToken) {
-            persistPlayerSession(data.state.sessionCode, data.state.self?.rejoinCode || urlRejoin);
-            haptics.notify('success');
-            setPlayerToken(data.playerToken);
-            setPlayerState(data.state);
-            setScreen('PLAYER');
-          } else {
+      try {
+        // 1. Explicit Rejoin QR deep-link (?join=CODE&rejoin=CODE)
+        if (hasUrlJoin && hasUrlRejoin) {
+          try {
+            const res = await fetch(`/api/sessions/${urlJoin}/rejoin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ rejoinCode: urlRejoin }),
+            });
+            const data = await res.json();
+            if (cancelled) return;
+            if (res.ok && data.state && data.playerToken) {
+              persistPlayerSession(data.state.sessionCode, data.state.self?.rejoinCode || urlRejoin);
+              haptics.notify('success');
+              setPlayerToken(data.playerToken);
+              setPlayerState(data.state);
+              setScreen('PLAYER');
+            } else {
+              setJoinCode(urlJoin);
+              setRejoinCodeInput(urlRejoin);
+              setJoinMode('REJOIN');
+              setJoinError(data.error || 'Could not auto-rejoin with this QR code.');
+              setScreen('JOIN_FORM');
+            }
+          } catch {
+            if (cancelled) return;
             setJoinCode(urlJoin);
             setRejoinCodeInput(urlRejoin);
             setJoinMode('REJOIN');
-            setJoinError(data.error || 'Could not auto-rejoin with this QR code.');
+            setJoinError('Could not reach Host PC to rejoin. Check Wi-Fi and tap Rejoin.');
             setScreen('JOIN_FORM');
+          } finally {
+            if (!cancelled) setRestoringSession(false);
           }
-        } catch {
-          if (cancelled) return;
-          setJoinCode(urlJoin);
-          setRejoinCodeInput(urlRejoin);
-          setJoinMode('REJOIN');
-          setJoinError('Could not reach Host PC to rejoin. Check Wi-Fi and tap Rejoin.');
-          setScreen('JOIN_FORM');
-        } finally {
-          if (!cancelled) setRestoringSession(false);
+          return;
         }
-        return;
-      }
 
-      // 2. Saved Mission Code + Player Rejoin Code (closed / switched apps)
-      const saved = readSavedPlayerSession();
-      if (saved && (!hasUrlJoin || urlJoin === saved.sessionCode)) {
-        try {
-          const pubRes = await fetch(`/api/sessions/${saved.sessionCode}/public`);
-          if (cancelled) return;
-          if (pubRes.status === 400 || pubRes.status === 404) {
-            clearSavedPlayerSession();
-          } else if (pubRes.ok) {
-            const pubData = (await pubRes.json()) as { phase?: string };
-            if (pubData.phase === 'ENDED') {
+        // 2. Saved Mission Code + Player Rejoin Code (closed / switched apps)
+        const saved = readSavedPlayerSession();
+        if (saved && (!hasUrlJoin || urlJoin === saved.sessionCode)) {
+          try {
+            const pubRes = await fetch(`/api/sessions/${saved.sessionCode}/public`);
+            if (cancelled) return;
+            if (pubRes.status === 400 || pubRes.status === 404) {
               clearSavedPlayerSession();
-            } else {
-              const rejoinRes = await fetch(`/api/sessions/${saved.sessionCode}/rejoin`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rejoinCode: saved.rejoinCode }),
-              });
-              const rejoinData = await rejoinRes.json();
-              if (cancelled) return;
-              if (rejoinRes.ok && rejoinData.state && rejoinData.playerToken) {
-                persistPlayerSession(
-                  rejoinData.state.sessionCode,
-                  rejoinData.state.self?.rejoinCode || saved.rejoinCode,
-                );
-                haptics.notify('success');
-                setPlayerToken(rejoinData.playerToken);
-                setPlayerState(rejoinData.state);
-                setScreen('PLAYER');
-                setRestoringSession(false);
-                return;
-              }
-              if (
-                rejoinRes.status === 400 ||
-                rejoinRes.status === 403 ||
-                rejoinRes.status === 404
-              ) {
+            } else if (pubRes.ok) {
+              const pubData = (await pubRes.json()) as { phase?: string };
+              if (pubData.phase === 'ENDED') {
                 clearSavedPlayerSession();
+              } else {
+                const rejoinRes = await fetch(`/api/sessions/${saved.sessionCode}/rejoin`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ rejoinCode: saved.rejoinCode }),
+                });
+                const rejoinData = await rejoinRes.json();
+                if (cancelled) return;
+                if (rejoinRes.ok && rejoinData.state && rejoinData.playerToken) {
+                  persistPlayerSession(
+                    rejoinData.state.sessionCode,
+                    rejoinData.state.self?.rejoinCode || saved.rejoinCode,
+                  );
+                  haptics.notify('success');
+                  setPlayerToken(rejoinData.playerToken);
+                  setPlayerState(rejoinData.state);
+                  setScreen('PLAYER');
+                  setRestoringSession(false);
+                  return;
+                }
+                if (
+                  rejoinRes.status === 400 ||
+                  rejoinRes.status === 403 ||
+                  rejoinRes.status === 404
+                ) {
+                  clearSavedPlayerSession();
+                }
               }
             }
+          } catch {
+            // Transient network error: preserve saved session codes and pre-fill Rejoin form
+            if (!cancelled && !hasUrlJoin) {
+              setJoinCode(saved.sessionCode);
+              setRejoinCodeInput(saved.rejoinCode);
+              setJoinMode('REJOIN');
+            }
           }
-        } catch {
-          // Transient network error: preserve saved session codes and pre-fill Rejoin form
-          if (!cancelled && !hasUrlJoin) {
-            setJoinCode(saved.sessionCode);
-            setRejoinCodeInput(saved.rejoinCode);
-            setJoinMode('REJOIN');
+        }
+
+        if (cancelled) return;
+        if (hasUrlJoin) {
+          setJoinCode(urlJoin);
+          setScreen('JOIN_FORM');
+        }
+        setRestoringSession(false);
+      } finally {
+        if (!cancelled && (hasUrlJoin || hasUrlRejoin)) {
+          try {
+            window.history.replaceState({}, '', window.location.pathname);
+          } catch {
+            // Ignore history restriction
           }
         }
       }
-
-      if (cancelled) return;
-      if (hasUrlJoin) {
-        setJoinCode(urlJoin);
-        setScreen('JOIN_FORM');
-      }
-      setRestoringSession(false);
     };
 
     void restore();

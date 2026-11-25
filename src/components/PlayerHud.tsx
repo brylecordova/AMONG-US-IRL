@@ -9,8 +9,6 @@ import {
   Eye,
   Flame,
   Lock,
-  Map as MapIcon,
-  Monitor,
   QrCode,
   Radio,
   Shield,
@@ -22,7 +20,6 @@ import {
   Unlock,
   Volume2,
   VolumeX,
-  Wind,
   X,
   ZapOff,
 } from 'lucide-react';
@@ -34,10 +31,9 @@ import {
   PLAYER_COLORS,
   PlayerColorId,
   PublicAlignment,
+  REACTOR_OVERRIDE_SHORT_CODE,
   SabotageKind,
-  SKELD_ROOMS,
   SkeldTaskDef,
-  StationActivityEvent,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { SkeldTaskIconBadge } from './PrintedQrCards';
@@ -78,18 +74,6 @@ interface ForensicBanner {
   reportedAlignment: PublicAlignment;
 }
 
-type StationModalState =
-  | {
-      kind: 'ADMIN_MAP';
-      roomActivity: Record<string, number>;
-      expiresAt: number;
-    }
-  | {
-      kind: 'SECURITY_FEED';
-      feed: StationActivityEvent[];
-      expiresAt: number;
-    };
-
 export const PlayerHud: React.FC<PlayerHudProps> = ({
   state,
   playerToken,
@@ -115,7 +99,9 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [reportingBody, setReportingBody] = useState(false);
   const [voteNowBusy, setVoteNowBusy] = useState(false);
   const [forensicResult, setForensicResult] = useState<ForensicBanner | null>(null);
-  const [stationModal, setStationModal] = useState<StationModalState | null>(null);
+  const [showReactorHoldModal, setShowReactorHoldModal] = useState(false);
+  const [showReactorArmedModal, setShowReactorArmedModal] = useState(false);
+  const [holdingReactor, setHoldingReactor] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [muted, setMuted] = useState(soundEngine.isMuted());
   const [nowMs, setNowMs] = useState(Date.now());
@@ -127,18 +113,17 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [localShieldRemaining, setLocalShieldRemaining] = useState(
     state.self.shieldCooldownRemainingSec ?? 0,
   );
-  const [localVentRemaining, setLocalVentRemaining] = useState(
-    state.self.ventCooldownRemainingSec ?? 0,
-  );
   const [sabotageBusy, setSabotageBusy] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
-  const [ghostBusy, setGhostBusy] = useState(false);
-  const [ghostRoom, setGhostRoom] = useState<string>(SKELD_ROOMS[0]);
+  const [reactorActionBusy, setReactorActionBusy] = useState(false);
   const [colorBusy, setColorBusy] = useState(false);
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
   const lastVisualAlertIdRef = useRef<string | null>(null);
   const serverSkewMsRef = useRef(state.serverTime - Date.now());
+  const holdingReactorRef = useRef(false);
+  const prevReactorActiveRef = useRef(state.activeSabotage?.kind === 'REACTOR');
+  const prevShieldedRef = useRef(false);
 
   // Sync cooldowns & clock offset from server snapshot and tick smoothly
   useEffect(() => {
@@ -147,13 +132,11 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     setLocalScanRemaining(state.self.scanCooldownRemainingSec);
     setLocalSabotageRemaining(state.self.sabotageCooldownRemainingSec ?? 0);
     setLocalShieldRemaining(state.self.shieldCooldownRemainingSec ?? 0);
-    setLocalVentRemaining(state.self.ventCooldownRemainingSec ?? 0);
   }, [
     state.self.killCooldownRemainingSec,
     state.self.scanCooldownRemainingSec,
     state.self.sabotageCooldownRemainingSec,
     state.self.shieldCooldownRemainingSec,
-    state.self.ventCooldownRemainingSec,
     state.serverTime,
   ]);
 
@@ -165,20 +148,108 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setLocalScanRemaining((s) => Math.max(0, s - 1));
       setLocalSabotageRemaining((sb) => Math.max(0, sb - 1));
       setLocalShieldRemaining((sh) => Math.max(0, sh - 1));
-      setLocalVentRemaining((v) => Math.max(0, v - 1));
-      setStationModal((prev) => (prev && now >= prev.expiresAt ? null : prev));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    if (state.phase !== 'MEETING' || !state.meeting?.revealEndsAt) return;
+    const reactorNeedsFastTick =
+      state.phase === 'PLAYING' && state.activeSabotage?.kind === 'REACTOR';
+    const shieldNeedsFastTick =
+      state.phase === 'PLAYING' && state.self.alive && state.self.shieldedUntil > 0;
+    const meetingNeedsFastTick = state.phase === 'MEETING' && Boolean(state.meeting?.revealEndsAt);
+    if (!reactorNeedsFastTick && !shieldNeedsFastTick && !meetingNeedsFastTick) return;
     setNowMs(Date.now());
     const fastTimer = setInterval(() => {
       setNowMs(Date.now());
-    }, 200);
+    }, 100);
     return () => clearInterval(fastTimer);
-  }, [state.phase, state.meeting?.revealEndsAt]);
+  }, [
+    state.phase,
+    state.self.alive,
+    state.self.shieldedUntil,
+    state.meeting?.revealEndsAt,
+    state.activeSabotage?.kind,
+  ]);
+
+  const sendReactorHold = async (holding: boolean) => {
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/reactor/hold`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${playerToken}`,
+        },
+        body: JSON.stringify({ holding }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.state) {
+        onUpdateState(data.state);
+      }
+      if (data.stabilized) {
+        holdingReactorRef.current = false;
+        setHoldingReactor(false);
+        setShowReactorHoldModal(false);
+        soundEngine.playTaskSuccess();
+        haptics.notify('success');
+      }
+    } catch {
+      // Heartbeat / release error ignored; server TTL auto-releases stale holds
+    }
+  };
+
+  // Close & release Reactor Hold modal when meltdown clears, phase changes, or player dies
+  useEffect(() => {
+    const isReactorActive =
+      state.phase === 'PLAYING' && state.activeSabotage?.kind === 'REACTOR';
+    if (prevReactorActiveRef.current && !isReactorActive && state.phase === 'PLAYING') {
+      soundEngine.playTaskSuccess();
+      haptics.notify('success');
+      setToastMsg('Reactor Meltdown stabilized!');
+    }
+    prevReactorActiveRef.current = isReactorActive;
+
+    if (!isReactorActive || !state.self.alive) {
+      if (holdingReactorRef.current) {
+        holdingReactorRef.current = false;
+        setHoldingReactor(false);
+      }
+      setShowReactorHoldModal(false);
+    }
+  }, [state.phase, state.activeSabotage?.kind, state.self.alive]);
+
+  // Heartbeat & exact 5s completion trigger while player is holding Reactor Override
+  useEffect(() => {
+    if (!holdingReactor || !showReactorHoldModal || state.activeSabotage?.kind !== 'REACTOR') {
+      return;
+    }
+    const heartbeat = setInterval(() => {
+      void sendReactorHold(true);
+    }, 750);
+
+    let completionTimer: ReturnType<typeof setTimeout> | null = null;
+    if (state.activeSabotage.dualHoldStartedAt) {
+      const effectiveNow = Date.now() + serverSkewMsRef.current;
+      const remainingMs = Math.max(
+        60,
+        state.activeSabotage.dualHoldStartedAt + 5050 - effectiveNow,
+      );
+      completionTimer = setTimeout(() => {
+        void sendReactorHold(true);
+      }, remainingMs);
+    }
+
+    return () => {
+      clearInterval(heartbeat);
+      if (completionTimer) clearTimeout(completionTimer);
+    };
+  }, [
+    holdingReactor,
+    showReactorHoldModal,
+    state.activeSabotage?.kind,
+    state.activeSabotage?.dualHoldStartedAt,
+  ]);
 
   // Show "YOU HAVE BEEN KILLED" modal immediately when killed
   useEffect(() => {
@@ -188,7 +259,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
-      setStationModal(null);
+      setShowReactorHoldModal(false);
       setShowKilledModal(true);
     }
   }, [killedAlertTrigger]);
@@ -201,14 +272,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
-      setStationModal(null);
+      setShowReactorHoldModal(false);
     }
   }, [meetingAlertTrigger]);
 
   // Play sabotage alarm
   useEffect(() => {
     if (sabotageAlertTrigger > 0) {
-      if (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') {
+      if (state.activeSabotage?.kind === 'REACTOR') {
         soundEngine.playMeltdownAlarm();
       } else {
         soundEngine.playSabotageAlarm();
@@ -282,7 +353,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setShowTerminal(false);
       setTerminalUnlocked(false);
       setDeadBodyFound(null);
-      setStationModal(null);
+      setShowReactorHoldModal(false);
+      setShowReactorArmedModal(false);
     }
 
     if (
@@ -343,16 +415,56 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
   const effectiveNowMs = nowMs + serverSkewMsRef.current;
 
+  const isShielded =
+    state.phase === 'PLAYING' &&
+    state.self.alive &&
+    state.self.shieldedUntil > effectiveNowMs;
+
+  const shieldLeftSec = isShielded
+    ? Math.max(0, Math.ceil((state.self.shieldedUntil - effectiveNowMs) / 1000))
+    : 0;
+
+  useEffect(() => {
+    if (isShielded && !prevShieldedRef.current) {
+      soundEngine.playShieldBlock();
+      haptics.notify('success');
+    }
+    prevShieldedRef.current = isShielded;
+  }, [isShielded]);
+
+  useEffect(() => {
+    if (!state.self.reactorArmed || !state.self.alive || state.activeSabotage) {
+      setShowReactorArmedModal(false);
+    }
+  }, [state.self.reactorArmed, state.self.alive, state.activeSabotage]);
+
   const signalJamLeftSec =
     state.activeSabotage?.kind === 'SIGNAL_JAM' && state.activeSabotage.expiresAt
       ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNowMs) / 1000))
       : 0;
 
   const crisisLeftSec =
-    (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') &&
-    state.activeSabotage.expiresAt
+    state.activeSabotage?.kind === 'REACTOR' && state.activeSabotage.expiresAt
       ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - effectiveNowMs) / 1000))
       : 0;
+
+  const startReactorHold = () => {
+    if (!state.self.alive || state.activeSabotage?.kind !== 'REACTOR') return;
+    if (holdingReactorRef.current) return;
+    holdingReactorRef.current = true;
+    setHoldingReactor(true);
+    haptics.impact('heavy');
+    soundEngine.playClick();
+    void sendReactorHold(true);
+  };
+
+  const stopReactorHold = () => {
+    if (!holdingReactorRef.current) return;
+    holdingReactorRef.current = false;
+    setHoldingReactor(false);
+    haptics.impact('light');
+    void sendReactorHold(false);
+  };
 
   const handleQrDetected = async (parsed: ParsedQrAction): Promise<QrScanValidationResult> => {
     const mode = scannerMode || 'AUTO';
@@ -399,48 +511,35 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       return { valid: true };
     }
 
-    if (parsed.kind === 'STATION') {
+    if (parsed.kind === 'REACTOR_OVERRIDE') {
       try {
-        const res = await fetch(`/api/sessions/${state.sessionCode}/station-scan`, {
+        const res = await fetch(`/api/sessions/${state.sessionCode}/reactor/scan`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             Authorization: `Bearer ${playerToken}`,
           },
-          body: JSON.stringify({ stationId: parsed.station.id }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         setScannerMode(null);
         onUpdateState(data.state);
         const outcome = data.outcome;
-        if (outcome.kind === 'ADMIN_MAP') {
-          haptics.notify('success');
-          setStationModal({
-            kind: 'ADMIN_MAP',
-            roomActivity: outcome.roomActivity,
-            expiresAt: Date.now() + 12_000,
-          });
-        } else if (outcome.kind === 'SECURITY_FEED') {
-          haptics.notify('success');
-          setStationModal({
-            kind: 'SECURITY_FEED',
-            feed: outcome.feed,
-            expiresAt: Date.now() + 12_000,
-          });
-        } else if (outcome.kind === 'VENT_RELAY') {
-          if (outcome.activated) {
-            haptics.notify('success');
-          } else {
-            haptics.notify('warning');
-          }
-          showToast(outcome.message);
+        if (outcome.kind === 'MELTDOWN_ARMED') {
+          soundEngine.playClick();
+          haptics.impact('medium');
+          setShowReactorArmedModal(true);
+        } else if (outcome.kind === 'OPEN_HOLD_PANEL') {
+          haptics.impact('medium');
+          setShowReactorHoldModal(true);
+        } else {
+          haptics.impact('light');
+          showToast(outcome.message || 'Reactor core nominal — no meltdown active.');
         }
         return { valid: true };
       } catch (err) {
         return {
           valid: false,
-          error: err instanceof Error ? err.message : 'Station terminal rejected.',
+          error: err instanceof Error ? err.message : 'Reactor Override rejected.',
         };
       }
     }
@@ -452,13 +551,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           error: `Signal Jam active! Emergency Meetings are disabled for ${signalJamLeftSec}s.`,
         };
       }
-      if (
-        (state.activeSabotage?.kind === 'REACTOR' || state.activeSabotage?.kind === 'O2') &&
-        crisisLeftSec > 0
-      ) {
+      if (state.activeSabotage?.kind === 'REACTOR' && crisisLeftSec > 0) {
         return {
           valid: false,
-          error: `Cannot call Emergency Meeting during an active ${state.activeSabotage.kind} crisis!`,
+          error: 'Cannot call Emergency Meeting during an active Reactor Meltdown!',
         };
       }
       try {
@@ -575,11 +671,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       showToast(
         kind === 'BLACKOUT'
           ? `Power Blackout triggered! Tasks locked until Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} is repaired.`
-          : kind === 'SIGNAL_JAM'
-            ? 'Signal Jam triggered! Emergency Meetings disabled for 60s.'
-            : kind === 'REACTOR'
-              ? 'Reactor Meltdown triggered! Crew must sync both Reactor stations.'
-              : 'O2 Depletion triggered! Crew must clear O2 Filter & Empty Chute.',
+          : 'Signal Jam triggered! Emergency Meetings disabled for 60s.',
       );
     } catch (err) {
       haptics.notify('error');
@@ -618,29 +710,53 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     }
   };
 
-  const handleUseGhostPower = async (power: 'GHOST_PING' | 'GHOST_FLICKER') => {
+  const handleTriggerArmedMeltdown = async () => {
+    if (reactorActionBusy) return;
     soundEngine.playClick();
-    haptics.impact('medium');
-    setGhostBusy(true);
+    haptics.impact('heavy');
+    setReactorActionBusy(true);
     try {
-      const res = await fetch(`/api/sessions/${state.sessionCode}/ghost-power`, {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/reactor/trigger`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${playerToken}`,
-        },
-        body: JSON.stringify({ power, room: ghostRoom }),
+        headers: { Authorization: `Bearer ${playerToken}` },
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      haptics.notify('success');
+      soundEngine.playMeltdownAlarm();
+      haptics.notify('warning');
+      setShowReactorArmedModal(false);
+      setTerminalUnlocked(false);
+      setShowTerminal(false);
       onUpdateState(data.state);
-      showToast(data.message);
+      showToast('Critical Reactor Meltdown triggered remotely!');
     } catch (err) {
       haptics.notify('error');
-      showToast(err instanceof Error ? err.message : 'Ghost power unavailable.');
+      showToast(err instanceof Error ? err.message : 'Unable to trigger Reactor Meltdown.');
     } finally {
-      setGhostBusy(false);
+      setReactorActionBusy(false);
+    }
+  };
+
+  const handleCancelArmedMeltdown = async () => {
+    if (reactorActionBusy) return;
+    soundEngine.playClick();
+    haptics.impact('light');
+    setReactorActionBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/reactor/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${playerToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setShowReactorArmedModal(false);
+      onUpdateState(data.state);
+      showToast('Armed Reactor Meltdown cancelled.');
+    } catch (err) {
+      haptics.notify('error');
+      showToast(err instanceof Error ? err.message : 'Unable to cancel armed Meltdown.');
+    } finally {
+      setReactorActionBusy(false);
     }
   };
 
@@ -664,17 +780,6 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       if (data.powerRestored) {
         soundEngine.playTaskSuccess();
         showToast('Grid power restored at Electrical! All tasks unlocked.');
-      } else if (data.sabotageCleared === 'REACTOR') {
-        soundEngine.playTaskSuccess();
-        showToast('Reactor Meltdown stabilized!');
-      } else if (data.sabotageCleared === 'O2') {
-        soundEngine.playTaskSuccess();
-        showToast('O2 Reserves stabilized!');
-      } else if (data.meltdownProgress) {
-        soundEngine.playClick();
-        showToast(
-          `Crisis Station 1/2 synced! Partner must finish the 2nd station within 15s.`,
-        );
       } else {
         showToast(
           isImpostorTeam || isJester
@@ -817,14 +922,38 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
   return (
     <div
-      className={`min-h-dvh bg-[#0B0F17] text-slate-100 flex flex-col ${
+      data-shielded={isShielded ? 'true' : 'false'}
+      className={`relative min-h-dvh text-slate-100 flex flex-col transition-colors duration-300 ${
+        isShielded ? 'bg-[#171406]' : 'bg-[#0B0F17]'
+      } ${
         state.phase === 'PLAYING'
           ? 'pb-[calc(5.75rem+env(safe-area-inset-bottom))]'
           : 'pb-[max(1.5rem,env(safe-area-inset-bottom))]'
       }`}
     >
+      {/* Full-Screen Golden-Yellow Guardian Shield Glow */}
+      <AnimatePresence>
+        {isShielded && (
+          <motion.div
+            key="guardian-shield-aura"
+            aria-hidden="true"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0.72, 1, 0.72] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+            className="pointer-events-none fixed inset-0 z-40 border-[4px] border-yellow-400/90 shadow-[inset_0_0_58px_rgba(250,204,21,0.72)] bg-gradient-to-b from-yellow-400/18 via-transparent to-amber-400/18"
+          />
+        )}
+      </AnimatePresence>
+
       {/* Compact Mobile Telemetry Bar (<= 15% cap) */}
-      <header className="sticky top-0 z-30 min-h-14 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 flex items-center justify-between gap-3">
+      <header
+        className={`sticky top-0 z-30 min-h-14 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] backdrop-blur-md border-b flex items-center justify-between gap-3 transition-colors duration-300 ${
+          isShielded
+            ? 'bg-[#1D1908]/95 border-yellow-400/70 shadow-[0_4px_24px_rgba(250,204,21,0.3)]'
+            : 'bg-[#0F1520]/95 border-white/10'
+        }`}
+      >
         <div className="flex items-center gap-2.5 min-w-0">
           <CrewmateAvatar
             color={state.self.color}
@@ -1002,6 +1131,35 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               transition={{ duration: 0.25 }}
               className="space-y-4"
             >
+              {/* Guardian Angel Aegis Shield Visual Cue */}
+              <AnimatePresence>
+                {isShielded && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.96 }}
+                    className="rounded-2xl p-3.5 border-2 border-yellow-400/85 bg-gradient-to-r from-yellow-500/25 via-amber-400/15 to-yellow-500/25 shadow-[0_0_28px_rgba(250,204,21,0.35)] flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-yellow-400/25 border border-yellow-300/70 flex items-center justify-center text-yellow-200 shrink-0">
+                        <Shield className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-display text-lg font-bold text-yellow-200 leading-tight">
+                          AEGIS SHIELD ACTIVE
+                        </div>
+                        <div className="text-[11px] text-yellow-100/85">
+                          Protected by Guardian Angel — next lethal strike deflected
+                        </div>
+                      </div>
+                    </div>
+                    <span className="font-mono text-base font-bold text-yellow-950 bg-yellow-300 px-2.5 py-1 rounded-lg tabular-nums shrink-0">
+                      {shieldLeftSec}s
+                    </span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* Neutral Crewmate Station Brief */}
               <div className="rounded-2xl p-4 border bg-[#151C28] border-white/10">
                 <div className="flex items-center justify-between gap-2">
@@ -1031,7 +1189,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.96 }}
                     className={`border-2 rounded-2xl p-4 space-y-3 ${
-                      state.activeSabotage.kind === 'REACTOR' || state.activeSabotage.kind === 'O2'
+                      state.activeSabotage.kind === 'REACTOR'
                         ? 'bg-red-600/20 border-red-500 animate-pulse'
                         : 'bg-amber-500/15 border-amber-400'
                     }`}
@@ -1041,17 +1199,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                         <ZapOff className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
                       ) : state.activeSabotage.kind === 'SIGNAL_JAM' ? (
                         <Radio className="w-6 h-6 text-amber-300 shrink-0 mt-0.5" />
-                      ) : state.activeSabotage.kind === 'REACTOR' ? (
-                        <Flame className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
                       ) : (
-                        <Wind className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+                        <Flame className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <div
                             className={`font-display text-2xl font-bold leading-none ${
-                              state.activeSabotage.kind === 'REACTOR' ||
-                              state.activeSabotage.kind === 'O2'
+                              state.activeSabotage.kind === 'REACTOR'
                                 ? 'text-red-300'
                                 : 'text-amber-200'
                             }`}
@@ -1059,10 +1214,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                             {state.activeSabotage.kind === 'BLACKOUT' && 'POWER BLACKOUT!'}
                             {state.activeSabotage.kind === 'SIGNAL_JAM' && 'COMMS SIGNAL JAM!'}
                             {state.activeSabotage.kind === 'REACTOR' && 'REACTOR MELTDOWN!'}
-                            {state.activeSabotage.kind === 'O2' && 'O2 DEPLETION!'}
                           </div>
-                          {(state.activeSabotage.kind === 'REACTOR' ||
-                            state.activeSabotage.kind === 'O2') && (
+                          {state.activeSabotage.kind === 'REACTOR' && (
                             <span className="font-mono text-lg font-bold text-white bg-red-600/60 px-2.5 py-0.5 rounded-lg tabular-nums">
                               {crisisLeftSec}s
                             </span>
@@ -1074,16 +1227,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                           {state.activeSabotage.kind === 'SIGNAL_JAM' &&
                             `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
                           {state.activeSabotage.kind === 'REACTOR' &&
-                            `Co-op Crisis: Complete Start Reactor${state.settings.hideManualCodes ? '' : ' (RCT9)'} AND Unlock Manifolds${state.settings.hideManualCodes ? '' : ' (MNF1)'} within 15s! (${(state.activeSabotage.clearedStations || []).length}/2 synced)`}
-                          {state.activeSabotage.kind === 'O2' &&
-                            `Co-op Crisis: Complete Clean O2 Filter${state.settings.hideManualCodes ? '' : ' (OXY6)'} AND Empty Chute${state.settings.hideManualCodes ? '' : ' (GRB3)'} within 15s! (${(state.activeSabotage.clearedStations || []).length}/2 synced)`}
+                            `2 alive players must scan the Reactor Override QR${state.settings.hideManualCodes ? '' : ` (${REACTOR_OVERRIDE_SHORT_CODE})`} and hold the button together for 5s! (${(state.activeSabotage.reactorHolders || []).length}/2 holding)`}
                         </p>
                       </div>
                     </div>
 
                     {(state.activeSabotage.kind === 'BLACKOUT' ||
-                      state.activeSabotage.kind === 'REACTOR' ||
-                      state.activeSabotage.kind === 'O2') &&
+                      state.activeSabotage.kind === 'REACTOR') &&
                       state.self.alive && (
                         <button
                           type="button"
@@ -1101,101 +1251,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                           <span>
                             {state.activeSabotage.kind === 'BLACKOUT'
                               ? 'Scan Fix Wiring QR to Restore Power'
-                              : 'Scan Crisis Station QR Now'}
+                              : 'Scan Reactor Override QR Now'}
                           </span>
                         </button>
                       )}
                   </motion.div>
                 )}
               </AnimatePresence>
-
-              {/* Ghost Power Deck (Only visible when dead — never leaks roles while alive!) */}
-              {!state.self.alive && (
-                <div className="bg-[#12192A] border border-fuchsia-400/35 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-fuchsia-300" />
-                      <span className="font-display text-xl font-bold text-white">
-                        Ghost Power Deck
-                      </span>
-                    </div>
-                    <span className="font-mono text-xs font-bold text-cyan-300 tabular-nums">
-                      Energy {state.self.ghostEnergy}/100
-                    </span>
-                  </div>
-
-                  <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-white/10">
-                    <div
-                      className="h-full bg-gradient-to-r from-cyan-400 to-fuchsia-400 transition-all duration-300"
-                      style={{ width: `${Math.min(100, state.self.ghostEnergy)}%` }}
-                    />
-                  </div>
-
-                  {isGuardian ? (
-                    <div className="space-y-2">
-                      <div className="text-xs text-slate-300">
-                        Guardian Angel Ghost Shield (50 Energy · 35s protection):
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        {state.players
-                          .filter((p) => p.alive && p.playerId !== state.self.playerId)
-                          .map((target) => (
-                            <button
-                              key={target.playerId}
-                              type="button"
-                              disabled={
-                                shieldBusy ||
-                                localShieldRemaining > 0 ||
-                                state.self.ghostEnergy < 50
-                              }
-                              onClick={() => handleDeployShield(target.playerId)}
-                              className="p-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-45 border border-cyan-400/40 flex items-center gap-2 text-left"
-                            >
-                              <CrewmateAvatar color={target.color} size={24} />
-                              <span className="text-xs font-semibold text-white truncate">
-                                {target.name}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-xs text-slate-300">
-                        {isCrewTeam
-                          ? 'Crew Ghost Beacon (40 Energy): Send an anonymous pulse to Admin Map & TV.'
-                          : 'Phantom Sensor Flicker (45 Energy): Trigger a decoy ping on Admin Map & Security.'}
-                      </div>
-                      <div className="flex gap-2">
-                        <select
-                          value={ghostRoom}
-                          onChange={(e) => setGhostRoom(e.target.value)}
-                          className="flex-1 min-h-[42px] px-3 rounded-xl bg-slate-950 border border-white/15 text-xs text-white"
-                        >
-                          {SKELD_ROOMS.map((room) => (
-                            <option key={room} value={room}>
-                              {room}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          disabled={
-                            ghostBusy ||
-                            state.self.ghostEnergy < (isCrewTeam ? 40 : 45)
-                          }
-                          onClick={() =>
-                            handleUseGhostPower(isCrewTeam ? 'GHOST_PING' : 'GHOST_FLICKER')
-                          }
-                          className="min-h-[42px] px-3.5 rounded-xl bg-fuchsia-500 hover:bg-fuchsia-400 disabled:opacity-45 text-slate-950 font-bold text-xs whitespace-nowrap"
-                        >
-                          {isCrewTeam ? 'Send Ping (40)' : 'Flicker (45)'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Assigned Task List (Identical Label for All Roles) */}
               <div className="bg-[#151C28] border border-white/10 rounded-2xl p-4 space-y-3">
@@ -2181,19 +2243,6 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                           </span>
                         </div>
 
-                        <div className="p-3 rounded-xl bg-slate-950/70 border border-white/10 flex items-center justify-between">
-                          <span className="text-xs text-slate-300">Airlock Vent Relay (VNT3)</span>
-                          <span
-                            className={`font-mono text-xs font-bold tabular-nums ${
-                              localVentRemaining > 0 ? 'text-amber-300' : 'text-emerald-300'
-                            }`}
-                          >
-                            {localVentRemaining > 0
-                              ? `Cooling (${localVentRemaining}s)`
-                              : 'Ready — Scan VNT3 (-6s Cooldown)'}
-                          </span>
-                        </div>
-
                         <div className="space-y-2">
                           <div className="flex items-center justify-between text-xs">
                             <span className="font-semibold text-red-300">Sabotage Systems</span>
@@ -2240,41 +2289,50 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                               <Radio className="w-4 h-4 shrink-0" />
                               <span>Signal Jam (60s)</span>
                             </button>
-                            <button
-                              type="button"
-                              disabled={
-                                sabotageBusy ||
-                                Boolean(state.activeSabotage) ||
-                                localSabotageRemaining > 0
-                              }
-                              onClick={() => {
-                                handleTriggerSabotage('REACTOR');
-                                setTerminalUnlocked(false);
-                                setShowTerminal(false);
-                              }}
-                              className="min-h-[48px] px-3 py-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/35 disabled:opacity-45 border border-rose-400/50 text-rose-200 font-semibold text-xs flex items-center justify-center gap-2"
-                            >
-                              <Flame className="w-4 h-4 shrink-0" />
-                              <span>Reactor Crisis</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={
-                                sabotageBusy ||
-                                Boolean(state.activeSabotage) ||
-                                localSabotageRemaining > 0
-                              }
-                              onClick={() => {
-                                handleTriggerSabotage('O2');
-                                setTerminalUnlocked(false);
-                                setShowTerminal(false);
-                              }}
-                              className="min-h-[48px] px-3 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-45 border border-cyan-400/40 text-cyan-200 font-semibold text-xs flex items-center justify-center gap-2"
-                            >
-                              <Wind className="w-4 h-4 shrink-0" />
-                              <span>O2 Depletion</span>
-                            </button>
                           </div>
+                          {state.self.reactorArmed && !state.activeSabotage ? (
+                            <div className="p-3.5 rounded-xl bg-red-950/50 border-2 border-red-400/70 space-y-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-bold text-red-200 flex items-center gap-1.5">
+                                  <Flame className="w-4 h-4 text-red-400 animate-pulse" />
+                                  <span>Reactor Meltdown Armed</span>
+                                </span>
+                                <span className="font-mono text-[11px] text-amber-300">
+                                  {localSabotageRemaining > 0
+                                    ? `Ready in ${localSabotageRemaining}s`
+                                    : 'Ready to Detonate'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  disabled={reactorActionBusy || localSabotageRemaining > 0}
+                                  onClick={handleTriggerArmedMeltdown}
+                                  className="min-h-[44px] px-3 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-45 text-white font-bold text-xs flex items-center justify-center gap-1.5"
+                                >
+                                  <Flame className="w-4 h-4 shrink-0" />
+                                  <span>
+                                    {localSabotageRemaining > 0
+                                      ? `Wait ${localSabotageRemaining}s`
+                                      : 'Trigger Meltdown'}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={reactorActionBusy}
+                                  onClick={handleCancelArmedMeltdown}
+                                  className="min-h-[44px] px-3 rounded-xl bg-white/10 hover:bg-white/15 disabled:opacity-45 text-slate-200 font-semibold text-xs"
+                                >
+                                  Cancel Armed
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-slate-400 leading-relaxed bg-slate-950/60 border border-white/5 rounded-xl px-3 py-2">
+                              <span className="text-rose-300 font-semibold">Critical Reactor Meltdown:</span>{' '}
+                              Scan the physical Reactor Override QR{state.settings.hideManualCodes ? '' : ` (${REACTOR_OVERRIDE_SHORT_CODE})`} to arm a remote trigger, then detonate it from anywhere else or cancel.
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -2299,7 +2357,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       </div>
                     )}
 
-                    {isGuardian && state.self.alive && (
+                    {isGuardian && (
                       <div className="space-y-2.5">
                         <div className="p-3 rounded-xl bg-slate-950/70 border border-cyan-500/30 flex items-center justify-between">
                           <span className="text-xs text-slate-300">Aegis Shield (35s)</span>
@@ -2612,94 +2670,212 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         )}
       </AnimatePresence>
 
-      {/* STATION TERMINAL MODAL (12-SECOND ADMIN MAP TABLE / SECURITY FEED) */}
+      {/* REACTOR MELTDOWN 2-PLAYER 5-SECOND SIMULTANEOUS HOLD MODAL */}
       <AnimatePresence>
-        {stationModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
-          >
+        {showReactorHoldModal &&
+          state.phase === 'PLAYING' &&
+          state.activeSabotage?.kind === 'REACTOR' &&
+          state.self.alive && (() => {
+            const holders = state.activeSabotage.reactorHolders || [];
+            const dualStartedAt = state.activeSabotage.dualHoldStartedAt;
+            const holdElapsedMs =
+              dualStartedAt && holders.length >= 2
+                ? Math.min(5000, Math.max(0, effectiveNowMs - dualStartedAt))
+                : 0;
+            const holdPct = Math.min(100, (holdElapsedMs / 5000) * 100);
+            const holdSec = (holdElapsedMs / 1000).toFixed(1);
+
+            return (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 bg-black/88 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
+              >
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.94, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.94 }}
+                  className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#151C28] border-2 border-red-500/80 rounded-2xl p-5 space-y-4 shadow-2xl"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-red-400 font-mono text-xs font-bold">
+                      <Flame className="w-4 h-4 animate-pulse" />
+                      <span>REACTOR MELTDOWN OVERRIDE</span>
+                    </div>
+                    <span className="font-mono text-sm font-bold text-white bg-red-600/70 px-2.5 py-0.5 rounded-lg tabular-nums">
+                      {crisisLeftSec}s
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Two alive players must scan this QR and <strong className="text-white">press &amp; hold</strong> the override clamp at the exact same time for <strong className="text-emerald-300">5.0 seconds</strong> to stop the meltdown.
+                  </p>
+
+                  {/* Live Dual-Hold Status */}
+                  <div className="p-3.5 rounded-xl bg-slate-950/75 border border-white/10 space-y-2.5">
+                    <div className="flex items-center justify-between text-xs font-mono">
+                      <span className="text-slate-300">
+                        Operators Holding:{' '}
+                        <strong className={holders.length >= 2 ? 'text-emerald-400' : 'text-amber-300'}>
+                          {holders.length}/2
+                        </strong>
+                      </span>
+                      <span className="text-emerald-300 font-bold tabular-nums">
+                        {holdSec}s / 5.0s
+                      </span>
+                    </div>
+
+                    <div className="h-3.5 bg-slate-900 rounded-full overflow-hidden border border-white/10">
+                      <div
+                        className={`h-full transition-all duration-100 ${
+                          holders.length >= 2 ? 'bg-emerald-400' : 'bg-amber-400/50'
+                        }`}
+                        style={{ width: `${holdPct}%` }}
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 min-h-[28px]">
+                      {holders.length === 0 ? (
+                        <span className="text-[11px] text-slate-400">
+                          No one holding yet — press and hold below!
+                        </span>
+                      ) : (
+                        holders.map((h) => (
+                          <span
+                            key={h.playerId}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-xs font-semibold text-emerald-200"
+                          >
+                            <CrewmateAvatar color={h.color} size={18} />
+                            <span>{h.playerId === state.self.playerId ? 'You' : h.name}</span>
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Press & Hold Button */}
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      startReactorHold();
+                    }}
+                    onPointerUp={stopReactorHold}
+                    onPointerCancel={stopReactorHold}
+                    onPointerLeave={stopReactorHold}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className={`w-full min-h-[84px] rounded-2xl border-2 font-display text-2xl font-bold tracking-wide flex flex-col items-center justify-center gap-1 select-none touch-none transition-all ${
+                      holdingReactor
+                        ? holders.length >= 2
+                          ? 'bg-emerald-500 border-emerald-200 text-slate-950 scale-[0.98] shadow-[0_0_28px_rgba(16,185,129,0.5)]'
+                          : 'bg-amber-400 border-amber-200 text-slate-950 scale-[0.98]'
+                        : 'bg-red-600 hover:bg-red-500 border-red-400 text-white shadow-lg'
+                    }`}
+                  >
+                    <span>
+                      {holdingReactor
+                        ? holders.length >= 2
+                          ? 'STABILIZING — KEEP HOLDING!'
+                          : 'HOLDING — NEED 2ND PLAYER!'
+                        : 'PRESS & HOLD TO OVERRIDE'}
+                    </span>
+                    <span className="text-[11px] font-sans font-semibold opacity-90">
+                      {holdingReactor
+                        ? 'Do not lift your finger until 5.0s completes'
+                        : 'Hold continuously for 5 seconds with a teammate'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopReactorHold();
+                      setShowReactorHoldModal(false);
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-xs"
+                  >
+                    Close Panel
+                  </button>
+                </motion.div>
+              </motion.div>
+            );
+          })()}
+      </AnimatePresence>
+
+      {/* IMPOSTOR ARMED REACTOR OVERRIDE REMOTE TRIGGER / CANCEL MODAL */}
+      <AnimatePresence>
+        {showReactorArmedModal &&
+          state.phase === 'PLAYING' &&
+          state.self.alive &&
+          state.self.reactorArmed &&
+          !state.activeSabotage && (
             <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94 }}
-              className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#151C28] border-2 border-cyan-400/70 rounded-2xl p-5 space-y-4 shadow-2xl"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold">
-                  {stationModal.kind === 'ADMIN_MAP' ? (
-                    <MapIcon className="w-4 h-4" />
-                  ) : (
-                    <Monitor className="w-4 h-4" />
-                  )}
-                  <span>
-                    {stationModal.kind === 'ADMIN_MAP'
-                      ? 'ADMIN MAP TABLE · LIVE RADAR'
-                      : 'SECURITY TERMINAL · CAM LOGS'}
+              <motion.div
+                initial={{ opacity: 0, scale: 0.94, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.94 }}
+                className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#151C28] border-2 border-red-500/80 rounded-2xl p-5 space-y-4 shadow-2xl"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-red-400 font-mono text-xs font-bold">
+                    <Flame className="w-4 h-4 animate-pulse" />
+                    <span>REACTOR OVERRIDE ARMED</span>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-amber-300">
+                    {localSabotageRemaining > 0 ? `Cooldown ${localSabotageRemaining}s` : 'Standby'}
                   </span>
                 </div>
-                <span className="font-mono text-xs font-bold text-amber-300 tabular-nums">
-                  {Math.max(0, Math.ceil((stationModal.expiresAt - nowMs) / 1000))}s
-                </span>
-              </div>
 
-              {stationModal.kind === 'ADMIN_MAP' ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {SKELD_ROOMS.map((room) => {
-                    const count = stationModal.roomActivity[room] || 0;
-                    return (
-                      <div
-                        key={room}
-                        className={`px-3 py-2 rounded-xl border flex items-center justify-between ${
-                          count > 0
-                            ? 'bg-emerald-950/50 border-emerald-400/50 text-white'
-                            : 'bg-slate-950/60 border-white/10 text-slate-400'
-                        }`}
-                      >
-                        <span className="text-xs font-semibold truncate">{room}</span>
-                        <span
-                          className={`font-mono text-xs font-bold px-1.5 py-0.5 rounded tabular-nums ${
-                            count > 0 ? 'bg-emerald-400 text-slate-950' : 'bg-white/5 text-slate-500'
-                          }`}
-                        >
-                          {count}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {stationModal.feed.length === 0 ? (
-                    <div className="text-xs text-slate-400 py-6 text-center">
-                      No recent camera or visual alerts recorded.
-                    </div>
-                  ) : (
-                    stationModal.feed.map((ev) => (
-                      <div
-                        key={ev.id}
-                        className="p-2.5 rounded-xl bg-slate-950/70 border border-white/10 text-xs"
-                      >
-                        <div className="font-semibold text-white">{ev.label}</div>
-                        <div className="text-[11px] font-mono text-cyan-300 mt-0.5">{ev.room}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Meltdown did <strong className="text-white">NOT</strong> start yet! Move away from the Reactor so nobody suspects you, then tap{' '}
+                  <strong className="text-red-300">Trigger Meltdown</strong> remotely—or cancel if you changed your mind.
+                </p>
 
-              <button
-                type="button"
-                onClick={() => setStationModal(null)}
-                className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs"
-              >
-                Close Readout
-              </button>
+                <button
+                  type="button"
+                  disabled={reactorActionBusy || localSabotageRemaining > 0}
+                  onClick={handleTriggerArmedMeltdown}
+                  className="w-full min-h-[54px] rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-45 text-white font-display text-2xl font-bold tracking-wide flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <Flame className="w-5 h-5" />
+                  <span>
+                    {localSabotageRemaining > 0
+                      ? `RECHARGING (${localSabotageRemaining}s)`
+                      : 'TRIGGER MELTDOWN NOW'}
+                  </span>
+                </button>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    disabled={reactorActionBusy}
+                    onClick={() => {
+                      haptics.impact('light');
+                      setShowReactorArmedModal(false);
+                      showToast('Reactor Meltdown stays armed in your Terminal.');
+                    }}
+                    className="min-h-[44px] px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-slate-200 font-semibold text-xs"
+                  >
+                    Hide &amp; Use Terminal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={reactorActionBusy}
+                    onClick={handleCancelArmedMeltdown}
+                    className="min-h-[44px] px-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-red-200 font-semibold text-xs"
+                  >
+                    Cancel Armed
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
+          )}
       </AnimatePresence>
     </div>
   );

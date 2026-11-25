@@ -8,12 +8,11 @@ import {
   Crosshair,
   Disc3,
   Eye,
+  Flame,
   FlaskConical,
   Fuel,
   Gauge,
   Grid3x3,
-  Map as MapIcon,
-  Monitor,
   Siren,
   ShieldCheck,
   Trash2,
@@ -24,14 +23,13 @@ import {
 import {
   buildMeetingQrPayload,
   buildPlayerQrPayload,
-  buildStationQrPayload,
+  buildReactorQrPayload,
   buildTaskQrPayload,
   PlayerColorDef,
   PlayerColorId,
+  REACTOR_OVERRIDE_SHORT_CODE,
   SkeldTaskDef,
   SkeldTaskId,
-  StationDef,
-  StationId,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { QrCodeImg } from './QrCodeImg';
@@ -623,107 +621,65 @@ export const PrintedEmergencyQrCard: React.FC<{
   );
 };
 
-const STATION_CARD_META: Record<
-  StationId,
-  {
-    Icon: React.FC<{ className?: string }>;
-    borderClass: string;
-    softBg: string;
-    darkHex: string;
-    badgeLabel: string;
-  }
-> = {
-  'admin-table': {
-    Icon: MapIcon,
-    borderClass: 'border-emerald-600',
-    softBg: '#ECFDF5',
-    darkHex: '#064E3B',
-    badgeLabel: 'SECTOR RADAR · 12S',
-  },
-  'security-cams': {
-    Icon: Monitor,
-    borderClass: 'border-cyan-600',
-    softBg: '#ECFEFF',
-    darkHex: '#164E63',
-    badgeLabel: 'CAM FEED · LIVE LOGS',
-  },
-  'vent-relay': {
-    Icon: Wind,
-    borderClass: 'border-red-600',
-    softBg: '#FEF2F2',
-    darkHex: '#7F1D1D',
-    badgeLabel: 'VENT HATCH · -6S COOLDOWN',
-  },
-};
-
-export const PrintedStationQrCard: React.FC<{
+export const PrintedReactorMeltdownQrCard: React.FC<{
   sessionCode: string;
-  station: StationDef;
   hideManualCodes: boolean;
-}> = ({ sessionCode, station, hideManualCodes }) => {
-  const meta = STATION_CARD_META[station.id];
-  const Icon = meta.Icon;
-
+}> = ({ sessionCode, hideManualCodes }) => {
   return (
-    <div
-      className={`print-card rounded-2xl border-[3px] ${meta.borderClass} overflow-hidden flex flex-col text-slate-900 shadow-sm`}
-      style={{ backgroundColor: meta.softBg }}
-    >
+    <div className="print-card print-badge-card rounded-2xl border-[3px] border-rose-600 bg-white overflow-hidden flex flex-col max-w-sm shadow-sm">
+      {/* Hazard Stripe Header */}
       <div
-        className="px-4 py-3 flex items-center justify-between gap-2 border-b border-black/10"
-        style={{ backgroundColor: '#FFFFFF' }}
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-white shadow-sm"
-            style={{ backgroundColor: station.accentHex }}
-          >
-            <Icon className="w-5 h-5" />
-          </div>
-          <div className="min-w-0 text-left">
-            <div className="font-display text-xl font-bold leading-none text-slate-900 truncate">
-              {station.name}
-            </div>
-            <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 mt-1">
-              {station.room} · STATION TERMINAL
-            </div>
-          </div>
-        </div>
-      </div>
+        className="h-4 w-full border-b-2 border-slate-900"
+        style={{
+          backgroundImage:
+            'repeating-linear-gradient(135deg, #E11D48 0px, #E11D48 12px, #0F172A 12px, #0F172A 24px)',
+        }}
+      />
 
-      <div className="p-4 flex-1 flex flex-col items-center justify-center gap-2.5">
-        <div
-          className="relative p-1.5 rounded-xl bg-white border-2 shadow-xs"
-          style={{ borderColor: station.accentHex }}
-        >
-          <div className="w-[164px] h-[164px] print:w-[216px] print:h-[216px]">
+      <div className="p-5 flex-1 flex flex-col items-center text-center gap-3 text-slate-900">
+        <div className="flex items-center gap-2 text-rose-600">
+          <Flame className="w-7 h-7" />
+          <span className="font-display text-3xl font-bold tracking-wide">
+            REACTOR OVERRIDE
+          </span>
+        </div>
+        <p className="text-xs text-slate-600 font-medium leading-snug">
+          <strong>Impostor:</strong> Scan to trigger Critical Reactor Meltdown.
+          <br />
+          <strong>Crew (2 Players):</strong> Scan &amp; hold together for 5s to stabilize.
+        </p>
+
+        <div className="p-2 rounded-xl border-[3px] border-rose-600 bg-white">
+          <div className="w-[180px] h-[180px] print:w-[228px] print:h-[228px]">
             <QrCodeImg
-              value={buildStationQrPayload(sessionCode, station.id)}
-              renderSize={360}
+              value={buildReactorQrPayload(sessionCode)}
+              renderSize={400}
               responsive
-              darkColor={meta.darkHex}
-              alt={`${station.name} QR`}
+              darkColor="#881337"
+              alt="Reactor Meltdown Override QR"
               className="!p-0.5"
             />
           </div>
         </div>
 
-        <p className="text-[10px] text-slate-700 text-center leading-snug px-1">
-          {station.description}
-        </p>
-
-        <div className="w-full flex items-center justify-between gap-2 pt-1 text-[9px] font-mono font-bold text-slate-600">
-          <span className="truncate">{meta.badgeLabel}</span>
+        <div className="w-full flex items-center justify-between text-xs font-mono font-bold text-slate-700 pt-1">
+          <span>REACTOR · {sessionCode}</span>
           {!hideManualCodes && (
-            <span
-              className="px-1.5 py-0.5 rounded text-white shrink-0"
-              style={{ backgroundColor: meta.darkHex }}
-            >
-              {station.shortCode}
+            <span className="px-2 py-0.5 rounded bg-rose-600 text-white">
+              CODE: {REACTOR_OVERRIDE_SHORT_CODE}
             </span>
           )}
         </div>
       </div>
+
+      {/* Hazard Stripe Bottom */}
+      <div
+        className="h-4 w-full border-t-2 border-slate-900"
+        style={{
+          backgroundImage:
+            'repeating-linear-gradient(135deg, #E11D48 0px, #E11D48 12px, #0F172A 12px, #0F172A 24px)',
+        }}
+      />
     </div>
   );
 };

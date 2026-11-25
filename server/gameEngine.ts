@@ -17,14 +17,13 @@ import {
   PlayerMatchStats,
   PublicAlignment,
   PublicPlayer,
+  ReactorHolder,
   SabotageKind,
   SecretRole,
   SKELD_ROOMS,
   SKELD_TASKS,
   SkeldTaskId,
-  STATION_CARDS,
   StationActivityEvent,
-  StationId,
   TaskProgress,
 } from '../src/shared/skeldData.ts';
 import {
@@ -79,7 +78,6 @@ function emptyStats(): PlayerMatchStats {
     sheriffHits: 0,
     sheriffMisfires: 0,
     meetingsCalled: 0,
-    ventsUsed: 0,
   };
 }
 
@@ -485,13 +483,11 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
     session.settings,
   );
   const shieldCooldown = effectiveCooldownSec(30, session.settings);
-  const ventCooldown = effectiveCooldownSec(20, session.settings);
 
   const killElapsed = Math.floor((now - self.lastKillAt) / 1000);
   const scanElapsed = Math.floor((now - self.lastScanAt) / 1000);
   const sabotageElapsed = session.lastSabotageAt ? Math.floor((now - session.lastSabotageAt) / 1000) : sabCooldown;
   const shieldElapsed = self.lastShieldAt ? Math.floor((now - self.lastShieldAt) / 1000) : shieldCooldown;
-  const ventElapsed = self.lastVentAt ? Math.floor((now - self.lastVentAt) / 1000) : ventCooldown;
 
   const arrivedSet = new Set(session.meeting?.arrivedPlayerIds || []);
   const voteNowSet = new Set(session.meeting?.voteNowPlayerIds || []);
@@ -535,12 +531,10 @@ export function projectForPlayer(session: StoredSession, playerToken: string): C
         self.secretRole === 'GUARDIAN_ANGEL' && session.phase === 'PLAYING'
           ? Math.max(0, shieldCooldown - shieldElapsed)
           : 0,
-      ventCooldownRemainingSec:
-        isImpostorTeam && session.phase === 'PLAYING'
-          ? Math.max(0, ventCooldown - ventElapsed)
-          : 0,
       shieldedUntil: self.shieldedUntil && self.shieldedUntil > now ? self.shieldedUntil : 0,
-      ghostEnergy: self.ghostEnergy ?? 0,
+      reactorArmed: Boolean(
+        self.reactorArmed && self.alive && isImpostorTeam && !session.activeSabotage,
+      ),
       teammates,
       ...(session.phase === 'ENDED' ? { revealedRole: self.secretRole, stats: ensureStats(self) } : {}),
     },
@@ -696,9 +690,8 @@ export async function joinGameSession(
     lastKillAt: 0,
     lastScanAt: 0,
     lastShieldAt: 0,
-    lastVentAt: 0,
     shieldedUntil: 0,
-    ghostEnergy: 0,
+    reactorArmed: false,
     stats: emptyStats(),
     connected: true,
   };
@@ -888,12 +881,11 @@ export async function startMission(
     player.alive = true;
     player.shieldedUntil = 0;
     player.shieldedBy = undefined;
-    player.ghostEnergy = 0;
+    player.reactorArmed = false;
     player.stats = emptyStats();
     player.lastKillAt = now - Math.floor((killCooldown * 1000) / 2);
     player.lastScanAt = now - Math.floor((scanCooldown * 1000) / 2);
     player.lastShieldAt = now - Math.floor((shieldCooldown * 1000) / 2);
-    player.lastVentAt = 0;
 
     const neededOther = Math.max(0, effectiveTaskCount - sharedCommon.length);
     const pickedIds: SkeldTaskId[] = [
@@ -916,7 +908,6 @@ export async function startMission(
   session.winner = null;
   session.winReason = null;
   session.missionStartedAt = now;
-  session.lastGhostTickAt = now;
   session.jesterEjectedWinnerId = null;
   session.activityFeed = [];
   session.recentVisualAlert = null;
@@ -960,10 +951,9 @@ export async function resetMissionToLobby(
     player.lastKillAt = 0;
     player.lastScanAt = 0;
     player.lastShieldAt = 0;
-    player.lastVentAt = 0;
     player.shieldedUntil = 0;
     player.shieldedBy = undefined;
-    player.ghostEnergy = 0;
+    player.reactorArmed = false;
     player.stats = emptyStats();
   }
   await saveSession(session);
@@ -1084,25 +1074,12 @@ export async function triggerSabotage(
     }
   }
 
-  const crisisDurationMs = session.settings.turboMode ? 35_000 : 45_000;
+  if (kind === 'REACTOR') {
+    throw new Error('Critical Reactor Meltdown is triggered by scanning the physical Reactor QR.');
+  }
+
   if (kind === 'SIGNAL_JAM') {
     session.activeSabotage = { kind: 'SIGNAL_JAM', startedAt: now, expiresAt: now + 60_000 };
-  } else if (kind === 'REACTOR') {
-    session.activeSabotage = {
-      kind: 'REACTOR',
-      startedAt: now,
-      expiresAt: now + crisisDurationMs,
-      clearedStations: [],
-      clearedByIds: [],
-    };
-  } else if (kind === 'O2') {
-    session.activeSabotage = {
-      kind: 'O2',
-      startedAt: now,
-      expiresAt: now + crisisDurationMs,
-      clearedStations: [],
-      clearedByIds: [],
-    };
   } else {
     session.activeSabotage = { kind: 'BLACKOUT', startedAt: now };
   }
@@ -1111,15 +1088,9 @@ export async function triggerSabotage(
   ensureStats(player).sabotagesTriggered += 1;
 
   const label =
-    kind === 'BLACKOUT'
-      ? 'Power Blackout initiated'
-      : kind === 'SIGNAL_JAM'
-        ? 'Comms Signal Jam initiated'
-        : kind === 'REACTOR'
-          ? 'Reactor Meltdown triggered!'
-          : 'O2 Depletion triggered!';
+    kind === 'BLACKOUT' ? 'Power Blackout initiated' : 'Comms Signal Jam initiated';
   pushActivity(session, {
-    room: kind === 'BLACKOUT' ? 'Electrical' : kind === 'REACTOR' ? 'Reactor' : kind === 'O2' ? 'O2' : 'Admin',
+    room: kind === 'BLACKOUT' ? 'Electrical' : 'Admin',
     label,
     kind: 'SABOTAGE',
   });
@@ -1138,7 +1109,6 @@ export async function completePlayerTask(
   wasCrewTask: boolean;
   powerRestored: boolean;
   sabotageCleared: SabotageKind | null;
-  meltdownProgress?: { clearedCount: number; needed: number };
   visualAlertBroadcast: boolean;
 }> {
   const session = await getSession(sessionCode);
@@ -1154,7 +1124,6 @@ export async function completePlayerTask(
   const taskDef = getTaskDef(taskId);
   let powerRestored = false;
   let sabotageCleared: SabotageKind | null = null;
-  let meltdownProgress: { clearedCount: number; needed: number } | undefined;
 
   if (session.activeSabotage?.kind === 'BLACKOUT') {
     const codeHint = session.settings.hideManualCodes ? '' : ' (WIR1)';
@@ -1174,56 +1143,13 @@ export async function completePlayerTask(
     sabotageCleared = 'BLACKOUT';
     ensureStats(player).sabotagesSaved += 1;
     pushTimeline(session, 'SABOTAGE_CLEARED', 'Power Grid Restored', 'Fix Wiring completed at Electrical');
-  } else if (session.activeSabotage?.kind === 'REACTOR' || session.activeSabotage?.kind === 'O2') {
-    const sab = session.activeSabotage;
-    const isReactorPair = sab.kind === 'REACTOR' && (taskId === 'start-reactor' || taskId === 'unlock-manifolds');
-    const isO2Pair = sab.kind === 'O2' && (taskId === 'clean-o2-filter' || taskId === 'empty-garbage');
-
-    if (isReactorPair || isO2Pair) {
-      if (!player.alive) {
-        throw new Error('Ghosts cannot stabilize critical Reactor or O2 emergencies.');
-      }
-
-      if (sab.syncWindowEndsAt && now > sab.syncWindowEndsAt) {
-        sab.clearedStations = [];
-        sab.clearedByIds = [];
-      }
-
-      const clearedStations = new Set<SkeldTaskId>(sab.clearedStations || []);
-      const clearedByIds = new Set<string>(sab.clearedByIds || []);
-      clearedStations.add(taskId);
-      clearedByIds.add(player.playerId);
-
-      sab.clearedStations = Array.from(clearedStations);
-      sab.clearedByIds = Array.from(clearedByIds);
-      sab.syncWindowEndsAt = now + 15_000;
-
-      const aliveCount = session.players.filter((p) => p.alive).length;
-      const clearedNow =
-        clearedStations.size >= 2 || (aliveCount >= 2 && clearedByIds.size >= 2);
-
-      if (clearedNow) {
-        sabotageCleared = sab.kind;
-        session.activeSabotage = null;
-        session.lastSabotageAt = now;
-        ensureStats(player).sabotagesSaved += 1;
-        pushTimeline(
-          session,
-          'SABOTAGE_CLEARED',
-          sabotageCleared === 'REACTOR' ? 'Reactor Meltdown Stabilized' : 'O2 Reserves Restored',
-          'Emergency dual-station sync completed',
-        );
-      } else {
-        meltdownProgress = { clearedCount: clearedStations.size, needed: 2 };
-      }
-    }
   }
 
   let visualAlertBroadcast = false;
   const isCrew = isCrewAligned(player.secretRole);
   const taskItem = player.assignedTasks.find((t) => t.taskId === taskId);
 
-  // Record anonymized room activity for Admin / Security / TV Sector Map (for all living roles, including Impostor fake tasks!)
+  // Record anonymized room activity for TV Sector Map (for all living roles, including Impostor fake tasks)
   if (player.alive) {
     if (taskDef.isVisual && session.settings.visualTaskAlerts && isCrew) {
       pushActivity(session, {
@@ -1259,7 +1185,7 @@ export async function completePlayerTask(
   }
 
   if (!taskItem) {
-    if (sabotageCleared || meltdownProgress || visualAlertBroadcast) {
+    if (sabotageCleared || visualAlertBroadcast) {
       await saveSession(session);
     }
     return {
@@ -1267,22 +1193,18 @@ export async function completePlayerTask(
       wasCrewTask: false,
       powerRestored,
       sabotageCleared,
-      meltdownProgress,
       visualAlertBroadcast,
     };
   }
 
   if (!taskItem.completed) {
     taskItem.completed = true;
-    if (!player.alive) {
-      player.ghostEnergy = Math.min(100, (player.ghostEnergy ?? 0) + 25);
-    }
     if (isCrew) {
       ensureStats(player).tasksCompleted += 1;
       evaluateWinConditions(session);
     }
     await saveSession(session);
-  } else if (sabotageCleared || meltdownProgress || visualAlertBroadcast) {
+  } else if (sabotageCleared || visualAlertBroadcast) {
     await saveSession(session);
   }
 
@@ -1291,7 +1213,6 @@ export async function completePlayerTask(
     wasCrewTask: isCrew,
     powerRestored,
     sabotageCleared,
-    meltdownProgress,
     visualAlertBroadcast,
   };
 }
@@ -1395,6 +1316,9 @@ export async function processPlayerBackScan(
     const now = Date.now();
     session.phase = 'MEETING';
     session.activeSabotage = null;
+    for (const p of session.players) {
+      p.reactorArmed = false;
+    }
     ensureStats(scanner).meetingsCalled += 1;
     session.meeting = {
       id: randomToken(8),
@@ -1482,7 +1406,7 @@ export async function processPlayerBackScan(
     }
 
     target.alive = false;
-    target.ghostEnergy = 40;
+    target.reactorArmed = false;
     scanner.lastKillAt = now;
     ensureStats(scanner).kills += 1;
     pushTimeline(
@@ -1515,7 +1439,7 @@ export async function processPlayerBackScan(
     scanner.lastScanAt = now;
     if (isImpostorAligned(target.secretRole)) {
       target.alive = false;
-      target.ghostEnergy = 40;
+      target.reactorArmed = false;
       ensureStats(scanner).sheriffHits += 1;
       pushTimeline(
         session,
@@ -1537,7 +1461,7 @@ export async function processPlayerBackScan(
 
     // Misfire on Crewmate or Jester -> Sheriff self-eliminates!
     scanner.alive = false;
-    scanner.ghostEnergy = 40;
+    scanner.reactorArmed = false;
     ensureStats(scanner).sheriffMisfires += 1;
     pushTimeline(
       session,
@@ -1618,14 +1542,6 @@ export async function castGuardianShield(
     }
   }
 
-  if (!guardian.alive) {
-    const energy = guardian.ghostEnergy ?? 0;
-    if (energy < 50) {
-      throw new Error(`Need 50 Ghost Energy to deploy Ghost Shield (${energy}/50). Complete ghost tasks to recharge.`);
-    }
-    guardian.ghostEnergy = energy - 50;
-  }
-
   const target = session.players.find((p) => p.playerId === targetPlayerId && p.alive);
   if (!target) throw new Error('Select a living crewmate to shield.');
   if (target.playerId === guardian.playerId) {
@@ -1640,185 +1556,262 @@ export async function castGuardianShield(
   return { session, targetName: target.name, targetColor: target.color };
 }
 
-export type StationScanOutcome =
+export type ReactorScanOutcome =
   | {
-      kind: 'ADMIN_MAP';
+      kind: 'OPEN_HOLD_PANEL';
       session: StoredSession;
-      roomActivity: Record<string, number>;
+      triggered: false;
+      message: string;
     }
   | {
-      kind: 'SECURITY_FEED';
+      kind: 'MELTDOWN_ARMED';
       session: StoredSession;
-      feed: StationActivityEvent[];
+      triggered: false;
+      message: string;
     }
   | {
-      kind: 'VENT_RELAY';
+      kind: 'NOMINAL';
       session: StoredSession;
-      activated: boolean;
-      cooldownShavedSec: number;
-      scrubbedTrail: boolean;
+      triggered: false;
       message: string;
     };
 
-export async function processStationScan(
+function pruneAndEvaluateReactorHold(
+  session: StoredSession,
+  now: number,
+): { changed: boolean; stabilized: boolean; saverIds: string[] } {
+  if (!session.activeSabotage || session.activeSabotage.kind !== 'REACTOR') {
+    return { changed: false, stabilized: false, saverIds: [] };
+  }
+
+  const aliveIds = new Set(session.players.filter((p) => p.alive).map((p) => p.playerId));
+  const prevHolders = session.activeSabotage.reactorHolders || [];
+  const activeHolders = prevHolders.filter(
+    (h) => aliveIds.has(h.playerId) && now - h.lastPingAt <= 2500,
+  );
+  let changed = activeHolders.length !== prevHolders.length;
+  session.activeSabotage.reactorHolders = activeHolders;
+
+  if (activeHolders.length >= 2) {
+    if (!session.activeSabotage.dualHoldStartedAt) {
+      session.activeSabotage.dualHoldStartedAt = now;
+      changed = true;
+    }
+    if (now - session.activeSabotage.dualHoldStartedAt >= 5000) {
+      const saverIds = activeHolders.map((h) => h.playerId);
+      const saverNames = activeHolders.map((h) => h.name).join(' & ');
+      session.activeSabotage = null;
+      session.lastSabotageAt = now;
+      for (const p of session.players) {
+        if (saverIds.includes(p.playerId)) {
+          ensureStats(p).sabotagesSaved += 1;
+        }
+      }
+      pushTimeline(
+        session,
+        'SABOTAGE_CLEARED',
+        'Reactor Meltdown Stabilized',
+        `${saverNames} held the Reactor Override together for 5s`,
+      );
+      return { changed: true, stabilized: true, saverIds };
+    }
+  } else if (session.activeSabotage.dualHoldStartedAt) {
+    session.activeSabotage.dualHoldStartedAt = null;
+    changed = true;
+  }
+
+  return { changed, stabilized: false, saverIds: [] };
+}
+
+export async function scanReactorOverrideQr(
   sessionCode: string,
   playerToken: string,
-  stationId: StationId,
-): Promise<StationScanOutcome> {
+): Promise<ReactorScanOutcome> {
   const session = await getSession(sessionCode);
   if (!session) throw new Error('Session not found.');
   if (session.phase !== 'PLAYING') {
-    throw new Error('Station terminals are only active during gameplay.');
+    throw new Error('Reactor Override terminal is only active during gameplay.');
   }
 
   const player = session.players.find((p) => p.playerToken === playerToken);
   if (!player) throw new Error('Player session invalid.');
-
-  const station = STATION_CARDS.find((s) => s.id === stationId);
-  if (!station) throw new Error('Unknown Skeld station terminal.');
 
   const now = Date.now();
 
-  if (stationId === 'admin-table') {
-    if (player.alive) {
-      pushActivity(session, {
-        room: 'Admin',
-        label: 'Admin Map Table accessed',
-        kind: 'STATION',
-        actorId: player.playerId,
-      });
-      await saveSession(session);
+  if (
+    session.activeSabotage?.kind === 'SIGNAL_JAM' &&
+    session.activeSabotage.expiresAt &&
+    now >= session.activeSabotage.expiresAt
+  ) {
+    session.activeSabotage = null;
+  }
+
+  if (session.activeSabotage?.kind === 'REACTOR') {
+    if (!player.alive) {
+      throw new Error('Ghosts cannot hold the physical Reactor Override clamps.');
     }
     return {
-      kind: 'ADMIN_MAP',
+      kind: 'OPEN_HOLD_PANEL',
       session,
-      roomActivity: computeRoomActivity(session, now),
+      triggered: false,
+      message: 'Hold the Override button simultaneously with a 2nd player for 5 seconds!',
     };
   }
 
-  if (stationId === 'security-cams') {
-    if (player.alive) {
-      pushActivity(session, {
-        room: 'Security',
-        label: 'Security cameras reviewed',
-        kind: 'STATION',
-        actorId: player.playerId,
-      });
-      await saveSession(session);
+  if (isImpostorAligned(player.secretRole)) {
+    if (!player.alive) {
+      throw new Error('Eliminated Impostors cannot arm a Reactor Meltdown.');
     }
+    if (session.activeSabotage) {
+      throw new Error(`Sabotage (${session.activeSabotage.kind}) is already active.`);
+    }
+
+    player.reactorArmed = true;
+    await saveSession(session);
+
     return {
-      kind: 'SECURITY_FEED',
+      kind: 'MELTDOWN_ARMED',
       session,
-      feed: sanitizeActivityFeed(session),
+      triggered: false,
+      message:
+        'Reactor Override armed! Walk anywhere else and trigger Meltdown remotely, or cancel.',
     };
   }
 
-  // Airlock Vent Relay (VNT3)
-  if (!player.alive || !isImpostorAligned(player.secretRole)) {
-    return {
-      kind: 'VENT_RELAY',
-      session,
-      activated: false,
-      cooldownShavedSec: 0,
-      scrubbedTrail: false,
-      message: 'Ventilation Grate Sealed — Crew Access Denied.',
-    };
-  }
-
-  const ventCooldown = effectiveCooldownSec(20, session.settings);
-  if (player.lastVentAt) {
-    const elapsed = Math.floor((now - player.lastVentAt) / 1000);
-    if (elapsed < ventCooldown) {
-      throw new Error(`Airlock Vent cooling down: ${ventCooldown - elapsed}s remaining.`);
-    }
-  }
-
-  // Scrub latest actorId activity trail & shave 6s from kill and sabotage cooldowns
-  let scrubbedTrail = false;
-  if (session.activityFeed) {
-    const idx = session.activityFeed.findIndex((ev) => ev.actorId === player.playerId);
-    if (idx !== -1) {
-      session.activityFeed.splice(idx, 1);
-      scrubbedTrail = true;
-    }
-  }
-
-  player.lastKillAt = Math.min(now, player.lastKillAt - 6000);
-  if (session.lastSabotageAt) {
-    session.lastSabotageAt = Math.min(now, session.lastSabotageAt - 6000);
-  }
-  player.lastVentAt = now;
-  ensureStats(player).ventsUsed += 1;
-
-  await saveSession(session);
   return {
-    kind: 'VENT_RELAY',
+    kind: 'NOMINAL',
     session,
-    activated: true,
-    cooldownShavedSec: 6,
-    scrubbedTrail,
-    message: scrubbedTrail
-      ? 'Vented! Latest Security trail scrubbed & cooldowns reduced by 6s.'
-      : 'Vented! Kill and Sabotage cooldowns reduced by 6s.',
+    triggered: false,
+    message: 'Reactor core nominal — no critical meltdown active.',
   };
 }
 
-export async function useGhostPower(
+export async function triggerArmedReactorMeltdown(
   sessionCode: string,
   playerToken: string,
-  power: 'GHOST_PING' | 'GHOST_FLICKER',
-  room: string,
-): Promise<{ session: StoredSession; message: string }> {
+): Promise<StoredSession> {
   const session = await getSession(sessionCode);
   if (!session) throw new Error('Session not found.');
   if (session.phase !== 'PLAYING') {
-    throw new Error('Ghost Powers are only active during gameplay.');
+    throw new Error('Reactor Meltdown can only be triggered during active gameplay.');
   }
 
   const player = session.players.find((p) => p.playerToken === playerToken);
   if (!player) throw new Error('Player session invalid.');
-  if (player.alive) throw new Error('Only Ghost players can trigger Ghost Powers.');
+  if (!player.alive) throw new Error('Eliminated Impostors cannot trigger a Reactor Meltdown.');
+  if (!isImpostorAligned(player.secretRole)) {
+    throw new Error('Only Impostors can trigger a Reactor Meltdown.');
+  }
+  if (!player.reactorArmed) {
+    throw new Error('Scan the physical Reactor Override QR first to arm Meltdown.');
+  }
 
-  const normalizedRoom = normalizeSkeldRoom(room);
-  const energy = player.ghostEnergy ?? 0;
+  const now = Date.now();
+  if (
+    session.activeSabotage?.kind === 'SIGNAL_JAM' &&
+    session.activeSabotage.expiresAt &&
+    now >= session.activeSabotage.expiresAt
+  ) {
+    session.activeSabotage = null;
+  }
 
-  if (power === 'GHOST_PING') {
-    if (!isCrewAligned(player.secretRole)) {
-      throw new Error('Only Crew ghosts can send a luminous Admin Ping.');
+  if (session.activeSabotage) {
+    throw new Error(`Sabotage (${session.activeSabotage.kind}) is already active.`);
+  }
+
+  const cooldownSec = effectiveCooldownSec(
+    session.settings.sabotageCooldownSec ?? DEFAULT_GAME_SETTINGS.sabotageCooldownSec,
+    session.settings,
+  );
+  if (session.lastSabotageAt) {
+    const elapsedSec = Math.floor((now - session.lastSabotageAt) / 1000);
+    if (elapsedSec < cooldownSec) {
+      throw new Error(`Sabotage module recharging: ${cooldownSec - elapsedSec}s remaining.`);
     }
-    if (energy < 40) {
-      throw new Error(`Need 40 Ghost Energy (${energy}/40). Complete ghost tasks to recharge.`);
-    }
-    player.ghostEnergy = energy - 40;
-    pushActivity(session, {
-      room: normalizedRoom,
-      label: `Ghost beacon pulse in ${normalizedRoom}`,
-      kind: 'GHOST_PING',
-    });
-    await saveSession(session);
-    return {
-      session,
-      message: `Sent Ghost Ping pulse to ${normalizedRoom} on Admin Map & TV!`,
-    };
   }
 
-  if (isCrewAligned(player.secretRole)) {
-    throw new Error('Only Impostor or Jester ghosts can trigger Sensor Flicker.');
+  for (const p of session.players) {
+    p.reactorArmed = false;
   }
-  if (energy < 45) {
-    throw new Error(`Need 45 Ghost Energy (${energy}/45). Complete ghost tasks to recharge.`);
-  }
-  player.ghostEnergy = energy - 45;
-  pushActivity(session, {
-    room: normalizedRoom,
-    label: `Phantom motion spike in ${normalizedRoom}`,
-    kind: 'GHOST_FLICKER',
-  });
-  await saveSession(session);
-  return {
-    session,
-    message: `Triggered phantom Sensor Flicker in ${normalizedRoom}!`,
+
+  const crisisDurationMs = session.settings.turboMode ? 35_000 : 45_000;
+  session.activeSabotage = {
+    kind: 'REACTOR',
+    startedAt: now,
+    expiresAt: now + crisisDurationMs,
+    reactorHolders: [],
+    dualHoldStartedAt: null,
   };
+  session.lastSabotageAt = now;
+  ensureStats(player).sabotagesTriggered += 1;
+
+  pushActivity(session, {
+    room: 'Reactor',
+    label: 'Critical Reactor Meltdown triggered!',
+    kind: 'SABOTAGE',
+  });
+  pushTimeline(session, 'SABOTAGE', 'Critical Reactor Meltdown triggered!');
+  await saveSession(session);
+  return session;
+}
+
+export async function cancelArmedReactorMeltdown(
+  sessionCode: string,
+  playerToken: string,
+): Promise<StoredSession> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'PLAYING') {
+    throw new Error('Reactor Override is only active during gameplay.');
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+
+  player.reactorArmed = false;
+  await saveSession(session);
+  return session;
+}
+
+export async function updateReactorHold(
+  sessionCode: string,
+  playerToken: string,
+  holding: boolean,
+): Promise<{ session: StoredSession; stabilized: boolean }> {
+  const session = await getSession(sessionCode);
+  if (!session) throw new Error('Session not found.');
+  if (session.phase !== 'PLAYING' || session.activeSabotage?.kind !== 'REACTOR') {
+    return { session, stabilized: false };
+  }
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) throw new Error('Player session invalid.');
+  if (!player.alive) {
+    throw new Error('Ghosts cannot hold the physical Reactor Override.');
+  }
+
+  const now = Date.now();
+  const existingHolders: ReactorHolder[] = (session.activeSabotage.reactorHolders || []).filter(
+    (h) => h.playerId !== player.playerId && now - h.lastPingAt <= 2500,
+  );
+
+  if (holding) {
+    const prevSelf = (session.activeSabotage.reactorHolders || []).find(
+      (h) => h.playerId === player.playerId,
+    );
+    existingHolders.push({
+      playerId: player.playerId,
+      name: player.name,
+      color: player.color,
+      startedAt: prevSelf?.startedAt ?? now,
+      lastPingAt: now,
+    });
+  }
+
+  session.activeSabotage.reactorHolders = existingHolders;
+  const evalResult = pruneAndEvaluateReactorHold(session, now);
+  await saveSession(session);
+  return { session, stabilized: evalResult.stabilized };
 }
 
 export async function triggerEmergencyButton(
@@ -1844,15 +1837,16 @@ export async function triggerEmergencyButton(
         throw new Error(`Signal Jam active! Emergency Meetings are disabled for ${remaining}s.`);
       }
       session.activeSabotage = null;
-    } else if (session.activeSabotage.kind === 'REACTOR' || session.activeSabotage.kind === 'O2') {
-      throw new Error(
-        `Cannot call Emergency Meeting during an active ${session.activeSabotage.kind} crisis!`,
-      );
+    } else if (session.activeSabotage.kind === 'REACTOR') {
+      throw new Error('Cannot call Emergency Meeting during an active Reactor Meltdown!');
     }
   }
 
   session.phase = 'MEETING';
   session.activeSabotage = null;
+  for (const p of session.players) {
+    p.reactorArmed = false;
+  }
   ensureStats(caller).meetingsCalled += 1;
   session.meeting = {
     id: randomToken(8),
@@ -2039,7 +2033,7 @@ function finalizeMeetingVotes(session: StoredSession): { ejected: boolean; jeste
   }
 
   ejected.alive = false;
-  ejected.ghostEnergy = 40;
+  ejected.reactorArmed = false;
   const isImp = isImpostorAligned(ejected.secretRole);
   const isJester = ejected.secretRole === 'JESTER';
 
@@ -2141,19 +2135,12 @@ export async function advanceSessionTimers(
   if (session.phase === 'PLAYING') {
     let changed = false;
 
-    // Passive +5 Ghost Energy every 5s for ghosts
-    if (!session.lastGhostTickAt || now - session.lastGhostTickAt >= 5000) {
-      session.lastGhostTickAt = now;
-      for (const p of session.players) {
-        if (!p.alive && (p.ghostEnergy ?? 0) < 100) {
-          p.ghostEnergy = Math.min(100, (p.ghostEnergy ?? 0) + 5);
-          changed = true;
-        }
-        if (p.shieldedUntil && now >= p.shieldedUntil) {
-          p.shieldedUntil = 0;
-          p.shieldedBy = undefined;
-          changed = true;
-        }
+    // Clear expired Guardian Angel shields promptly
+    for (const p of session.players) {
+      if (p.shieldedUntil && now >= p.shieldedUntil) {
+        p.shieldedUntil = 0;
+        p.shieldedBy = undefined;
+        changed = true;
       }
     }
 
@@ -2171,24 +2158,35 @@ export async function advanceSessionTimers(
       };
     }
 
-    if (
-      (session.activeSabotage?.kind === 'REACTOR' || session.activeSabotage?.kind === 'O2') &&
-      session.activeSabotage.expiresAt &&
-      now >= session.activeSabotage.expiresAt
-    ) {
-      const kind = session.activeSabotage.kind;
-      finalizeMatchEnd(
-        session,
-        'IMPOSTORS',
-        kind === 'REACTOR'
-          ? 'Reactor meltdown reached critical mass before stabilization.'
-          : 'Ship oxygen reserves completely depleted.',
-      );
-      await saveSession(session);
-      return {
-        changed: true,
-        event: { type: 'game:ended', payload: { winner: session.winner, winReason: session.winReason } },
-      };
+    if (session.activeSabotage?.kind === 'REACTOR') {
+      const evalResult = pruneAndEvaluateReactorHold(session, now);
+      if (evalResult.stabilized) {
+        await saveSession(session);
+        return {
+          changed: true,
+          event: { type: 'sabotage:cleared', payload: { kind: 'REACTOR' } },
+        };
+      }
+      if (evalResult.changed) {
+        changed = true;
+      }
+
+      // Let the countdown visibly reach 0s for a thrilling final beat before ending the match
+      if (session.activeSabotage.expiresAt && now >= session.activeSabotage.expiresAt + 1000) {
+        finalizeMatchEnd(
+          session,
+          'IMPOSTORS',
+          'Reactor meltdown reached critical mass before stabilization.',
+        );
+        await saveSession(session);
+        return {
+          changed: true,
+          event: {
+            type: 'game:ended',
+            payload: { winner: session.winner, winReason: session.winReason },
+          },
+        };
+      }
     }
 
     if (changed) {

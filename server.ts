@@ -18,6 +18,7 @@ import {
 import {
   advanceSessionTimers,
   agreeVoteNow,
+  cancelArmedReactorMeltdown,
   castGuardianShield,
   castMeetingVote,
   changePlayerColorInLobby,
@@ -28,17 +29,18 @@ import {
   kickPlayerFromLobby,
   markPlayerArrived,
   processPlayerBackScan,
-  processStationScan,
   projectForHost,
   projectForPlayer,
   rejoinGameSession,
   resetMissionToLobby,
+  scanReactorOverrideQr,
   startMission,
+  triggerArmedReactorMeltdown,
   triggerEmergencyButton,
   triggerSabotage,
   updateHostPublicUrl,
+  updateReactorHold,
   updateSessionSettings,
-  useGhostPower,
 } from './server/gameEngine.ts';
 import {
   PLAYER_COLORS,
@@ -46,8 +48,6 @@ import {
   SabotageKind,
   SKELD_TASKS,
   SkeldTaskId,
-  STATION_CARDS,
-  StationId,
 } from './src/shared/skeldData.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -644,11 +644,7 @@ async function main() {
       const code = sanitizeSessionCode(req.params.code);
       const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
       const { kind } = req.body as { kind?: unknown };
-      if (
-        !code ||
-        !playerToken ||
-        (kind !== 'BLACKOUT' && kind !== 'SIGNAL_JAM' && kind !== 'REACTOR' && kind !== 'O2')
-      ) {
+      if (!code || !playerToken || (kind !== 'BLACKOUT' && kind !== 'SIGNAL_JAM')) {
         return res.status(400).json({ error: 'Invalid sabotage request.' });
       }
       const session = await triggerSabotage(code, playerToken, kind as SabotageKind);
@@ -675,7 +671,6 @@ async function main() {
         wasCrewTask,
         powerRestored,
         sabotageCleared,
-        meltdownProgress,
         visualAlertBroadcast,
       } = await completePlayerTask(code, playerToken, taskId as SkeldTaskId);
 
@@ -692,7 +687,6 @@ async function main() {
         wasCrewTask,
         powerRestored,
         sabotageCleared,
-        meltdownProgress,
         visualAlertBroadcast,
         state: projectForPlayer(session, playerToken),
       });
@@ -826,57 +820,90 @@ async function main() {
     }
   });
 
-  app.post('/api/sessions/:code/station-scan', async (req, res) => {
+  app.post('/api/sessions/:code/reactor/scan', async (req, res) => {
     try {
       const code = sanitizeSessionCode(req.params.code);
       const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
-      const { stationId } = req.body as { stationId?: unknown };
-      if (
-        !code ||
-        !playerToken ||
-        typeof stationId !== 'string' ||
-        !STATION_CARDS.some((s) => s.id === stationId)
-      ) {
-        return res.status(400).json({ error: 'Invalid Skeld station terminal.' });
+      if (!code || !playerToken) {
+        return res.status(401).json({ error: 'Unauthorized.' });
       }
 
-      const outcome = await processStationScan(code, playerToken, stationId as StationId);
-      if (outcome.kind !== 'VENT_RELAY' || outcome.activated) {
-        await broadcastSessionState(code);
-      }
+      const outcome = await scanReactorOverrideQr(code, playerToken);
 
-      const { session: outcomeSession, ...publicOutcome } = outcome;
       res.json({
-        outcome: publicOutcome,
-        state: projectForPlayer(outcomeSession, playerToken),
+        outcome: {
+          kind: outcome.kind,
+          triggered: outcome.triggered,
+          message: outcome.message,
+        },
+        state: projectForPlayer(outcome.session, playerToken),
       });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Station scan rejected.' });
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Reactor scan rejected.' });
     }
   });
 
-  app.post('/api/sessions/:code/ghost-power', async (req, res) => {
+  app.post('/api/sessions/:code/reactor/trigger', async (req, res) => {
     try {
       const code = sanitizeSessionCode(req.params.code);
       const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
-      const { power, room } = req.body as { power?: unknown; room?: unknown };
-      if (
-        !code ||
-        !playerToken ||
-        (power !== 'GHOST_PING' && power !== 'GHOST_FLICKER') ||
-        typeof room !== 'string' ||
-        !room.trim()
-      ) {
-        return res.status(400).json({ error: 'Invalid ghost power payload.' });
+      if (!code || !playerToken) {
+        return res.status(401).json({ error: 'Unauthorized.' });
       }
-      const { session, message } = await useGhostPower(code, playerToken, power, room);
-      await broadcastSessionState(code);
+      const session = await triggerArmedReactorMeltdown(code, playerToken);
+      await broadcastSessionState(code, {
+        type: 'sabotage:alert',
+        payload: { kind: 'REACTOR' },
+      });
+      res.json({ state: projectForPlayer(session, playerToken) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to trigger Reactor Meltdown.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/reactor/cancel', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) {
+        return res.status(401).json({ error: 'Unauthorized.' });
+      }
+      const session = await cancelArmedReactorMeltdown(code, playerToken);
+      res.json({ state: projectForPlayer(session, playerToken) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to cancel armed Meltdown.' });
+    }
+  });
+
+  app.post('/api/sessions/:code/reactor/hold', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) {
+        return res.status(401).json({ error: 'Unauthorized.' });
+      }
+      const { holding } = req.body as { holding?: boolean };
+      const { session, stabilized } = await updateReactorHold(
+        code,
+        playerToken,
+        Boolean(holding),
+      );
+
+      if (stabilized) {
+        await broadcastSessionState(code, {
+          type: 'sabotage:cleared',
+          payload: { kind: 'REACTOR' },
+        });
+      } else {
+        await broadcastSessionState(code);
+      }
+
       res.json({
-        message,
+        stabilized,
         state: projectForPlayer(session, playerToken),
       });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Ghost power rejected.' });
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to update Reactor Override.' });
     }
   });
 

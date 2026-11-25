@@ -213,43 +213,7 @@ export const PLAYER_COLORS: PlayerColorDef[] = [
   { id: 'lime', label: 'Lime', hex: '#50EF39', shade: '#15A742', code: 'LIM', textOnSuit: '#0F172A' },
 ];
 
-export type StationId = 'admin-table' | 'security-cams' | 'vent-relay';
-
-export interface StationDef {
-  id: StationId;
-  name: string;
-  room: string;
-  shortCode: string;
-  accentHex: string;
-  description: string;
-}
-
-export const STATION_CARDS: StationDef[] = [
-  {
-    id: 'admin-table',
-    name: 'Admin Map Table',
-    room: 'Admin',
-    shortCode: 'ADM1',
-    accentHex: '#10B981',
-    description: 'View live anonymous occupancy across all Skeld rooms for 12 seconds.',
-  },
-  {
-    id: 'security-cams',
-    name: 'Security Terminal',
-    room: 'Security',
-    shortCode: 'SEC2',
-    accentHex: '#06B6D4',
-    description: 'Inspect an anonymized rolling feed of recent station & visual task alerts.',
-  },
-  {
-    id: 'vent-relay',
-    name: 'Airlock Vent Relay',
-    room: 'MedBay / Electrical',
-    shortCode: 'VNT3',
-    accentHex: '#EF4444',
-    description: 'Impostors scrub their latest Security trail and shave 6s off cooldowns. Sealed for Crew.',
-  },
-];
+export const REACTOR_OVERRIDE_SHORT_CODE = 'MELT';
 
 export const SKELD_ROOMS = [
   'Cafeteria',
@@ -294,15 +258,22 @@ export type SecretRole =
 export type PublicAlignment = 'CREWMATE' | 'IMPOSTOR';
 export type WinnerTeam = 'CREWMATES' | 'IMPOSTORS' | 'JESTER';
 export type GamePhase = 'LOBBY' | 'PLAYING' | 'MEETING' | 'ENDED';
-export type SabotageKind = 'BLACKOUT' | 'SIGNAL_JAM' | 'REACTOR' | 'O2';
+export type SabotageKind = 'BLACKOUT' | 'SIGNAL_JAM' | 'REACTOR';
+
+export interface ReactorHolder {
+  playerId: string;
+  name: string;
+  color: PlayerColorId;
+  startedAt: number;
+  lastPingAt: number;
+}
 
 export interface ActiveSabotage {
   kind: SabotageKind;
   startedAt: number;
   expiresAt?: number;
-  clearedStations?: SkeldTaskId[];
-  clearedByIds?: string[];
-  syncWindowEndsAt?: number;
+  reactorHolders?: ReactorHolder[];
+  dualHoldStartedAt?: number | null;
 }
 
 export interface GameSettings {
@@ -359,14 +330,13 @@ export interface PlayerMatchStats {
   sheriffHits: number;
   sheriffMisfires: number;
   meetingsCalled: number;
-  ventsUsed: number;
 }
 
 export interface StationActivityEvent {
   id: string;
   room: string;
   label: string;
-  kind: 'TASK' | 'VISUAL' | 'STATION' | 'SABOTAGE' | 'GHOST_PING' | 'GHOST_FLICKER' | 'VENT';
+  kind: 'TASK' | 'VISUAL' | 'SABOTAGE';
   timestamp: number;
 }
 
@@ -434,9 +404,8 @@ export interface SelfPlayer extends PublicPlayer {
   scanCooldownRemainingSec: number;
   sabotageCooldownRemainingSec: number;
   shieldCooldownRemainingSec: number;
-  ventCooldownRemainingSec: number;
   shieldedUntil: number;
-  ghostEnergy: number;
+  reactorArmed: boolean;
   teammates: Array<{ playerId: string; name: string; color: PlayerColorId; role: SecretRole }>;
 }
 
@@ -525,7 +494,7 @@ export interface HostGameState {
 
 export type ParsedQrAction =
   | { kind: 'TASK'; sessionCode?: string; task: SkeldTaskDef }
-  | { kind: 'STATION'; sessionCode?: string; station: StationDef }
+  | { kind: 'REACTOR_OVERRIDE'; sessionCode?: string }
   | { kind: 'PLAYER'; sessionCode?: string; color: PlayerColorDef }
   | { kind: 'MEETING'; sessionCode?: string }
   | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string }
@@ -535,8 +504,8 @@ export function buildTaskQrPayload(sessionCode: string, taskId: SkeldTaskId): st
   return `SKELD|TASK|${sessionCode.toUpperCase()}|${taskId}`;
 }
 
-export function buildStationQrPayload(sessionCode: string, stationId: StationId): string {
-  return `SKELD|STATION|${sessionCode.toUpperCase()}|${stationId}`;
+export function buildReactorQrPayload(sessionCode: string): string {
+  return `SKELD|REACTOR|${sessionCode.toUpperCase()}|OVERRIDE`;
 }
 
 export function buildPlayerQrPayload(sessionCode: string, colorId: PlayerColorId): string {
@@ -617,9 +586,8 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
       const task = SKELD_TASKS.find((t) => t.id === target);
       if (task) return { kind: 'TASK', sessionCode, task };
     }
-    if (kind === 'STATION' && target) {
-      const station = STATION_CARDS.find((s) => s.id === target);
-      if (station) return { kind: 'STATION', sessionCode, station };
+    if (kind === 'REACTOR') {
+      return { kind: 'REACTOR_OVERRIDE', sessionCode };
     }
     if (kind === 'PLAYER' && target) {
       const color = PLAYER_COLORS.find((c) => c.id === target);
@@ -630,17 +598,14 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     }
   }
 
-  // Check manual short codes (e.g., WIR1, ADM1, RED, EMRG)
+  // Check manual short codes (e.g., WIR1, MELT, RED, EMRG)
   const upper = trimmed.toUpperCase().replace(/[^A-Z0-9-]/g, '');
   if (upper === 'EMRG' || upper === 'MEET' || upper === 'CAFETERIA') {
     return { kind: 'MEETING' };
   }
 
-  const stationByShort = STATION_CARDS.find(
-    (s) => s.shortCode === upper || s.id.toUpperCase() === upper,
-  );
-  if (stationByShort) {
-    return { kind: 'STATION', station: stationByShort };
+  if (upper === REACTOR_OVERRIDE_SHORT_CODE || upper === 'MELTDOWN' || upper === 'REACTOROVERRIDE') {
+    return { kind: 'REACTOR_OVERRIDE' };
   }
 
   const taskByShort = SKELD_TASKS.find(
@@ -666,8 +631,4 @@ export function getColorDef(colorId: PlayerColorId): PlayerColorDef {
 
 export function getTaskDef(taskId: SkeldTaskId): SkeldTaskDef {
   return SKELD_TASKS.find((t) => t.id === taskId) || SKELD_TASKS[0];
-}
-
-export function getStationDef(stationId: StationId): StationDef {
-  return STATION_CARDS.find((s) => s.id === stationId) || STATION_CARDS[0];
 }

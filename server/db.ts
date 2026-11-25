@@ -29,10 +29,9 @@ export interface StoredPlayer {
   lastKillAt: number;
   lastScanAt: number;
   lastShieldAt?: number;
-  lastVentAt?: number;
   shieldedUntil?: number;
   shieldedBy?: string;
-  ghostEnergy?: number;
+  reactorArmed?: boolean;
   stats?: PlayerMatchStats;
   connected: boolean;
 }
@@ -76,7 +75,6 @@ export interface StoredSession {
   winner: WinnerTeam | null;
   winReason: string | null;
   missionStartedAt?: number;
-  lastGhostTickAt?: number;
   jesterEjectedWinnerId?: string | null;
   activityFeed?: Array<StationActivityEvent & { actorId?: string }>;
   recentVisualAlert?: VisualTaskAlert | null;

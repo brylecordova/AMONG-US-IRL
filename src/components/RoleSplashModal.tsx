@@ -201,9 +201,9 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
                 {secretRole === 'JESTER' &&
                   'Neutral Trickster: Fake tasks and act suspicious enough to get voted out during an Emergency Meeting to win solo!'}
                 {secretRole === 'IMPOSTOR' &&
-                  'Tap Scan QR on an alive Crewmate’s back to eliminate them. Open Terminal to trigger Power, Comms, Reactor, or O2 sabotages.'}
+                  'Tap Scan QR on an alive Crewmate’s back to eliminate them. Open Terminal for Power or Comms sabotages, or scan the Reactor Override QR to arm a remote Meltdown you can trigger from anywhere or cancel.'}
                 {secretRole === 'SHAPESHIFTER' &&
-                  'You are the Shapeshifter Impostor: Investigator scans detect you as CREWMATE! Open Terminal for Sabotages and cooldowns.'}
+                  'You are the Shapeshifter Impostor: Investigator scans detect you as CREWMATE! Open Terminal for Sabotages, or scan the Reactor Override QR to arm a remote Meltdown.'}
               </p>
 
               <div className="flex items-start gap-2 pt-2 border-t border-white/10 text-xs text-emerald-300/90">
