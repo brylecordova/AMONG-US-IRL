@@ -1,9 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import jsQR from 'jsqr';
-import { Camera, ImagePlus, Keyboard, RefreshCw, SwitchCamera, X } from 'lucide-react';
+import { Camera, ImagePlus, Keyboard, RefreshCw, Smartphone, SwitchCamera, X } from 'lucide-react';
 import { parseQrOrManualInput, ParsedQrAction } from '../shared/skeldData';
 import { soundEngine } from '../utils/sound';
+
+declare global {
+  interface Window {
+    AmongUsAndroid?: {
+      openNativeQrScanner?: (title?: string) => void;
+      closeNativeQrScanner?: () => void;
+      notifyQrValidation?: (valid: boolean, errorMessage?: string) => void;
+    };
+    __onAndroidQrScanned?: (rawText: string) => void;
+  }
+}
 
 export interface QrScanValidationResult {
   valid: boolean;
@@ -38,6 +49,10 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   onDetectedRef.current = onDetected;
   const mountedRef = useRef(true);
   const cooldownTimerRef = useRef<number | null>(null);
+
+  const hasNativeAndroidScanner =
+    typeof window !== 'undefined' &&
+    typeof window.AmongUsAndroid?.openNativeQrScanner === 'function';
 
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
@@ -74,9 +89,10 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         if (!mountedRef.current) return true;
 
         if (result && result.valid === false) {
-          setManualError(
-            result.error || 'QR code not valid right now. Aim at a valid station or badge QR.',
-          );
+          const errMessage =
+            result.error || 'QR code not valid right now. Aim at a valid station or badge QR.';
+          setManualError(errMessage);
+          window.AmongUsAndroid?.notifyQrValidation?.(false, errMessage);
           if (cooldownTimerRef.current !== null) {
             window.clearTimeout(cooldownTimerRef.current);
           }
@@ -87,11 +103,14 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         }
 
         soundEngine.playClick();
+        window.AmongUsAndroid?.notifyQrValidation?.(true, '');
         stopCamera();
         return true;
       } catch (err) {
         if (!mountedRef.current) return false;
-        setManualError(err instanceof Error ? err.message : 'Unable to process QR code.');
+        const errMessage = err instanceof Error ? err.message : 'Unable to process QR code.';
+        setManualError(errMessage);
+        window.AmongUsAndroid?.notifyQrValidation?.(false, errMessage);
         if (cooldownTimerRef.current !== null) {
           window.clearTimeout(cooldownTimerRef.current);
         }
@@ -104,8 +123,17 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     [stopCamera],
   );
 
+  const launchNativeScanner = useCallback(() => {
+    setManualError(null);
+    detectedRef.current = false;
+    window.AmongUsAndroid?.openNativeQrScanner?.(title);
+  }, [title]);
+
   const startCamera = useCallback(
     async (preferredFacing: 'environment' | 'user') => {
+      if (hasNativeAndroidScanner) {
+        return;
+      }
       stopCamera();
       setCameraError(null);
 
@@ -268,11 +296,31 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
   useEffect(() => {
     detectedRef.current = false;
+
+    if (hasNativeAndroidScanner) {
+      window.__onAndroidQrScanned = (rawText: string) => {
+        if (!mountedRef.current) return;
+        const parsed = parseQrOrManualInput(rawText);
+        if (!parsed) {
+          const msg = 'Unrecognized QR code — keep aiming at an AMONG-US IRL QR code.';
+          setManualError(msg);
+          window.AmongUsAndroid?.notifyQrValidation?.(false, msg);
+          return;
+        }
+        void submitParsedQr(parsed, true);
+      };
+      launchNativeScanner();
+      return () => {
+        window.__onAndroidQrScanned = undefined;
+        window.AmongUsAndroid?.closeNativeQrScanner?.();
+      };
+    }
+
     startCamera(facingMode);
     return () => {
       stopCamera();
     };
-  }, [facingMode, startCamera, stopCamera]);
+  }, [facingMode, hasNativeAndroidScanner, launchNativeScanner, startCamera, stopCamera, submitParsedQr]);
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -353,6 +401,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             type="button"
             onClick={() => {
               stopCamera();
+              window.AmongUsAndroid?.closeNativeQrScanner?.();
               onClose();
             }}
             className="min-w-[44px] min-h-[44px] rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300 shrink-0"
@@ -363,67 +412,93 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Live Camera Viewfinder */}
-          <div
-            className={`relative h-56 bg-slate-950 rounded-xl border-2 overflow-hidden flex items-center justify-center ${borderAccent}`}
-          >
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              className={`w-full h-full object-cover ${cameraActive ? 'opacity-100' : 'opacity-0'}`}
-            />
-            <canvas ref={canvasRef} className="hidden" />
-
-            {cameraActive ? (
-              <>
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="relative w-40 h-40 border-2 border-white/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] overflow-hidden flex items-center justify-center">
-                    <div className="w-36 h-0.5 bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-scanner-sweep" />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setFacingMode((m) => (m === 'environment' ? 'user' : 'environment'))}
-                  className="absolute bottom-2.5 right-2.5 min-h-[40px] px-3 rounded-lg bg-black/70 hover:bg-black/90 border border-white/20 text-white text-xs font-medium flex items-center gap-1.5"
-                >
-                  <SwitchCamera className="w-4 h-4" />
-                  <span>Flip</span>
-                </button>
-              </>
-            ) : (
-              <div className="absolute inset-0 p-4 flex flex-col items-center justify-center text-center gap-2.5">
-                <Camera className="w-8 h-8 text-slate-500" />
-                <p className="text-xs text-slate-300 max-w-xs leading-relaxed">
-                  {cameraError || 'Initializing camera QR scanner...'}
+          {/* Live Camera Viewfinder (Native CameraX on Android APK, WebRTC/jsQR in Browser) */}
+          {hasNativeAndroidScanner ? (
+            <div
+              className={`relative rounded-xl border-2 bg-slate-950 p-5 flex flex-col items-center justify-center text-center gap-3 ${borderAccent}`}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-400/30 flex items-center justify-center text-cyan-300">
+                <Smartphone className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-white">Android Native Camera Scanner</p>
+                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                  Uses the Android device camera directly over local Wi-Fi and stays active until a valid mission QR code is scanned.
                 </p>
-                {cameraError && (
-                  <button
-                    type="button"
-                    onClick={() => startCamera(facingMode)}
-                    className="px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-semibold text-white flex items-center gap-1.5"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Retry Camera</span>
-                  </button>
+              </div>
+              <button
+                type="button"
+                onClick={launchNativeScanner}
+                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Open Android Camera Scanner</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              <div
+                className={`relative h-56 bg-slate-950 rounded-xl border-2 overflow-hidden flex items-center justify-center ${borderAccent}`}
+              >
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className={`w-full h-full object-cover ${cameraActive ? 'opacity-100' : 'opacity-0'}`}
+                />
+                <canvas ref={canvasRef} className="hidden" />
+
+                {cameraActive ? (
+                  <>
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div className="relative w-40 h-40 border-2 border-white/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] overflow-hidden flex items-center justify-center">
+                        <div className="w-36 h-0.5 bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-scanner-sweep" />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFacingMode((m) => (m === 'environment' ? 'user' : 'environment'))}
+                      className="absolute bottom-2.5 right-2.5 min-h-[40px] px-3 rounded-lg bg-black/70 hover:bg-black/90 border border-white/20 text-white text-xs font-medium flex items-center gap-1.5"
+                    >
+                      <SwitchCamera className="w-4 h-4" />
+                      <span>Flip</span>
+                    </button>
+                  </>
+                ) : (
+                  <div className="absolute inset-0 p-4 flex flex-col items-center justify-center text-center gap-2.5">
+                    <Camera className="w-8 h-8 text-slate-500" />
+                    <p className="text-xs text-slate-300 max-w-xs leading-relaxed">
+                      {cameraError || 'Initializing camera QR scanner...'}
+                    </p>
+                    {cameraError && (
+                      <button
+                        type="button"
+                        onClick={() => startCamera(facingMode)}
+                        className="px-3.5 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-semibold text-white flex items-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Camera</span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* Native Photo Capture Fallback (Works on phones even over plain HTTP LAN!) */}
-          <label className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-white/15 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer">
-            <ImagePlus className="w-4 h-4" />
-            <span>Take Photo of QR Code (HTTP Camera Fallback)</span>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={handlePhotoUpload}
-              className="hidden"
-            />
-          </label>
+              {/* Native Photo Capture Fallback (Works on phones even over plain HTTP LAN!) */}
+              <label className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-white/15 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer">
+                <ImagePlus className="w-4 h-4" />
+                <span>Take Photo of QR Code (HTTP Camera Fallback)</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoUpload}
+                  className="hidden"
+                />
+              </label>
+            </>
+          )}
 
           {/* Manual Fallback Code Input (Hidden when Host enables Hide Manual Codes) */}
           {!hideManualCodes && (

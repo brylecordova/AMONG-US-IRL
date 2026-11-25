@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Check,
   Download,
   Printer,
   Radio,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
   Sliders,
+  Smartphone,
   Trash2,
+  Upload,
   Users,
   Volume2,
   VolumeX,
@@ -41,6 +44,16 @@ interface HostDashboardProps {
 type HostTab = 'CONTROL' | 'PRINT' | 'RULES';
 type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'MEETING';
 
+interface ApkStatusInfo {
+  available: boolean;
+  fileName: string;
+  originalFileName?: string;
+  sizeBytes: number;
+  sha256?: string;
+  updatedAt?: string;
+  downloadPath: string;
+}
+
 export const HostDashboard: React.FC<HostDashboardProps> = ({
   state,
   hostToken,
@@ -56,8 +69,117 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(soundEngine.isMuted());
   const printSheetRef = React.useRef<HTMLDivElement | null>(null);
+  const apkInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const [apkStatus, setApkStatus] = useState<ApkStatusInfo | null>(null);
+  const [apkLoading, setApkLoading] = useState(false);
+  const [apkUploading, setApkUploading] = useState(false);
+  const [apkUploadPct, setApkUploadPct] = useState(0);
+  const [apkDragOver, setApkDragOver] = useState(false);
+  const [apkError, setApkError] = useState<string | null>(null);
 
   const joinUrl = `${state.publicUrl}/?join=${state.sessionCode}`;
+  const apkDownloadUrl = `${state.publicUrl}/download/among-us-irl.apk`;
+
+  const fetchApkStatus = useCallback(async () => {
+    setApkLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/host/apk`, {
+        headers: {
+          Authorization: `Bearer ${hostToken}`,
+        },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { status?: ApkStatusInfo };
+      if (data.status) {
+        setApkStatus(data.status);
+      }
+    } catch {
+      // Non-fatal network hiccup while polling APK folder status
+    } finally {
+      setApkLoading(false);
+    }
+  }, [hostToken, state.sessionCode]);
+
+  useEffect(() => {
+    void fetchApkStatus();
+  }, [fetchApkStatus]);
+
+  const uploadApkFile = (file: File) => {
+    setApkError(null);
+    if (!file.name.toLowerCase().endsWith('.apk')) {
+      setApkError('Please select a valid Android .apk file.');
+      return;
+    }
+    if (file.size === 0 || file.size > 125 * 1024 * 1024) {
+      setApkError('APK file must be between 1 byte and 125 MB.');
+      return;
+    }
+
+    setApkUploading(true);
+    setApkUploadPct(0);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/sessions/${state.sessionCode}/host/apk`);
+    xhr.setRequestHeader('Authorization', `Bearer ${hostToken}`);
+    xhr.setRequestHeader('Content-Type', 'application/vnd.android.package-archive');
+    xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        setApkUploadPct(Math.round((ev.loaded / ev.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      setApkUploading(false);
+      try {
+        const data = JSON.parse(xhr.responseText || '{}') as {
+          status?: ApkStatusInfo;
+          error?: string;
+        };
+        if (xhr.status >= 200 && xhr.status < 300 && data.status) {
+          setApkStatus(data.status);
+          setApkUploadPct(100);
+        } else {
+          setApkError(data.error || `Upload failed (${xhr.status}).`);
+        }
+      } catch {
+        setApkError(`Upload failed (${xhr.status}).`);
+      }
+    };
+
+    xhr.onerror = () => {
+      setApkUploading(false);
+      setApkError('Network error while uploading APK to Host server.');
+    };
+
+    xhr.send(file);
+  };
+
+  const removeHostedApk = async () => {
+    setApkError(null);
+    setApkLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/${state.sessionCode}/host/apk`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${hostToken}`,
+        },
+      });
+      const data = (await res.json()) as { status?: ApkStatusInfo; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to remove hosted APK.');
+      }
+      if (data.status) {
+        setApkStatus(data.status);
+      }
+    } catch (err) {
+      setApkError(err instanceof Error ? err.message : 'Unable to remove hosted APK.');
+    } finally {
+      setApkLoading(false);
+    }
+  };
 
   const callHostApi = async (path: string, body?: unknown) => {
     setBusy(true);
@@ -477,6 +599,167 @@ ${compiledCss}
                   {state.dbMode === 'mongodb' ? 'MongoDB Connected' : 'Local Persistent Store'}
                 </span>
               </div>
+            </div>
+
+            {/* Android Companion App (.apk) Download QR & Local Hosting */}
+            <div className="bg-[#151C28] border border-white/10 rounded-2xl p-6 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Smartphone className="w-5 h-5 text-cyan-400 shrink-0" />
+                    <h2 className="font-display text-2xl font-bold text-white">
+                      Android Companion App
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Scan to download the camera-enabled .apk directly from this Host PC
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`text-xs font-mono font-semibold tabular-nums ${
+                      apkStatus?.available ? 'text-emerald-400' : 'text-slate-400'
+                    }`}
+                  >
+                    {apkStatus?.available
+                      ? `${(apkStatus.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                      : 'Not Hosted'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => fetchApkStatus()}
+                    disabled={apkLoading}
+                    title="Refresh public-apk folder status"
+                    className="min-w-[32px] min-h-[32px] rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${apkLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-center py-1">
+                <QrCodeImg
+                  value={apkDownloadUrl}
+                  size={184}
+                  alt="Download AMONG-US IRL Android APK"
+                />
+              </div>
+
+              <div className="text-center font-mono text-[11px] text-slate-300 break-all bg-slate-950/70 px-3 py-2 rounded-lg border border-white/5">
+                {apkDownloadUrl}
+              </div>
+
+              {apkStatus?.available ? (
+                <div className="bg-slate-950/70 border border-emerald-500/25 rounded-xl p-3 space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400">Hosted Package</span>
+                    <span className="font-mono text-emerald-300 truncate max-w-[180px]">
+                      {apkStatus.originalFileName || apkStatus.fileName}
+                    </span>
+                  </div>
+                  {apkStatus.sha256 && (
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">SHA-256</span>
+                      <span className="font-mono text-slate-300 tabular-nums">
+                        {apkStatus.sha256.slice(0, 16)}...
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 pt-1">
+                    <a
+                      href={apkStatus.downloadPath}
+                      download="among-us-irl.apk"
+                      className="flex-1 min-h-[38px] px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download APK</span>
+                    </a>
+                    <button
+                      type="button"
+                      disabled={apkLoading}
+                      onClick={removeHostedApk}
+                      className="min-h-[38px] px-3 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 font-semibold text-xs flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Remove</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  No APK hosted yet. Drag and drop your built <code className="text-cyan-300">.apk</code> below or place it in the local <code className="text-cyan-300">public-apk/</code> folder.
+                </p>
+              )}
+
+              {/* Drag-and-Drop / Click APK Upload Dropzone */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setApkDragOver(true);
+                }}
+                onDragLeave={() => setApkDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setApkDragOver(false);
+                  const dropped = e.dataTransfer.files?.[0];
+                  if (dropped) uploadApkFile(dropped);
+                }}
+                onClick={() => {
+                  if (!apkUploading) apkInputRef.current?.click();
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && !apkUploading) {
+                    e.preventDefault();
+                    apkInputRef.current?.click();
+                  }
+                }}
+                className={`rounded-xl border border-dashed p-4 text-center cursor-pointer transition-colors ${
+                  apkDragOver
+                    ? 'border-cyan-400 bg-cyan-500/10'
+                    : 'border-white/20 bg-slate-950/60 hover:border-cyan-400/60 hover:bg-slate-900/70'
+                }`}
+              >
+                <input
+                  ref={apkInputRef}
+                  type="file"
+                  accept=".apk,application/vnd.android.package-archive"
+                  className="hidden"
+                  onChange={(e) => {
+                    const selected = e.target.files?.[0];
+                    if (selected) uploadApkFile(selected);
+                    e.target.value = '';
+                  }}
+                />
+                <div className="flex flex-col items-center gap-1.5">
+                  <Upload className="w-5 h-5 text-cyan-400" />
+                  <span className="text-xs font-semibold text-white">
+                    {apkUploading
+                      ? `Uploading APK... ${apkUploadPct}%`
+                      : apkStatus?.available
+                        ? 'Drop new .apk here to replace'
+                        : 'Drop .apk here or click to upload'}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Served immediately at /download/among-us-irl.apk (max 125 MB)
+                  </span>
+                </div>
+                {apkUploading && (
+                  <div className="mt-3 h-1.5 w-full bg-slate-900 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-400 transition-all"
+                      style={{ width: `${apkUploadPct}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {apkError && (
+                <div className="bg-red-500/15 border border-red-500/40 text-red-200 px-3 py-2 rounded-lg text-xs">
+                  {apkError}
+                </div>
+              )}
             </div>
           </section>
 

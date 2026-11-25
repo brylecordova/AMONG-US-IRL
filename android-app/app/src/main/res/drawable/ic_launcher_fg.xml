@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Backpack -->
+    <path
+        android:fillColor="#B91C1C"
+        android:pathData="M29,42 C25,42 23,45 23,49 L23,67 C23,71 25,74 29,74 L35,74 L35,42 Z" />
+    <!-- Suit Body -->
+    <path
+        android:fillColor="#EF4444"
+        android:pathData="M34,39 C34,28 43,23 54,23 C65,23 74,28 74,39 L74,77 C74,81 71,84 67,84 L62,84 C59,84 57,82 57,78 L57,72 L51,72 L51,78 C51,82 49,84 46,84 L41,84 C37,84 34,81 34,77 Z" />
+    <!-- Visor -->
+    <path
+        android:fillColor="#22D3EE"
+        android:pathData="M49,35 L69,35 C74,35 77,38 77,43 C77,48 74,51 69,51 L49,51 C44,51 41,48 41,43 C41,38 44,35 49,35 Z" />
+    <!-- Visor Highlight -->
+    <path
+        android:fillColor="#CFFAFE"
+        android:pathData="M50,38 L66,38 C68,38 69,39 69,40.5 C69,42 68,43 66,43 L50,43 C48,43 47,42 47,40.5 C47,39 48,38 50,38 Z" />
+</vector>

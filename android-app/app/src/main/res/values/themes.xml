@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AmongUsIrl" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/cyan_accent</item>
+        <item name="colorPrimaryVariant">@color/surface_bar</item>
+        <item name="colorOnPrimary">@color/bg_deep</item>
+        <item name="colorSecondary">@color/emerald_accent</item>
+        <item name="android:windowBackground">@color/bg_deep</item>
+        <item name="android:statusBarColor">@color/surface_bar</item>
+        <item name="android:navigationBarColor">@color/bg_deep</item>
+    </style>
+</resources>

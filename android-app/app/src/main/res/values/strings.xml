@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AMONG-US IRL</string>
+    <string name="launcher_subtitle">Android Companion with Native Camera QR Scanner</string>
+    <string name="scan_host_qr">Scan Host Join QR Code</string>
+    <string name="host_url_label">Host Server URL (LAN IP or Port-Forwarded)</string>
+    <string name="host_url_hint">http://192.168.1.50:3000/?join=ABCD</string>
+    <string name="connect_btn">Connect to Mission</string>
+    <string name="change_host">Change Host</string>
+    <string name="reload_page">Reload</string>
+    <string name="scanner_close">Close</string>
+    <string name="scanner_torch">Light</string>
+</resources>

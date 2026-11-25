@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import http from 'http';
@@ -47,6 +48,98 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
+const APK_DIR = path.resolve(process.cwd(), 'public-apk');
+const CANONICAL_APK_NAME = 'among-us-irl.apk';
+const APK_META_NAME = 'apk-meta.json';
+const MAX_APK_BYTES = 125 * 1024 * 1024;
+
+function resolveSafeApkPath(fileName: string): string {
+  const baseName = path.basename(fileName);
+  if (!baseName || baseName !== fileName || baseName.includes('..')) {
+    throw new Error('Invalid APK file path.');
+  }
+  const resolved = path.resolve(APK_DIR, baseName);
+  if (!resolved.startsWith(APK_DIR + path.sep)) {
+    throw new Error('Path escapes APK directory.');
+  }
+  return resolved;
+}
+
+function isValidApkHeader(buf: Buffer): boolean {
+  return (
+    buf.length >= 4 &&
+    buf[0] === 0x50 &&
+    buf[1] === 0x4b &&
+    buf[2] === 0x03 &&
+    buf[3] === 0x04
+  );
+}
+
+function findHostedApkFile(): { filePath: string; originalFileName: string } | null {
+  if (!fs.existsSync(APK_DIR)) return null;
+  const canonicalPath = resolveSafeApkPath(CANONICAL_APK_NAME);
+  if (fs.existsSync(canonicalPath)) {
+    return { filePath: canonicalPath, originalFileName: CANONICAL_APK_NAME };
+  }
+  const entries = fs
+    .readdirSync(APK_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.apk'))
+    .map((entry) => {
+      const safePath = resolveSafeApkPath(entry.name);
+      return {
+        name: entry.name,
+        filePath: safePath,
+        mtimeMs: fs.statSync(safePath).mtimeMs,
+      };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  if (entries.length === 0) return null;
+  return { filePath: entries[0].filePath, originalFileName: entries[0].name };
+}
+
+interface ApkMetaFile {
+  originalFileName?: string;
+  sha256?: string;
+  updatedAt?: string;
+  sizeBytes?: number;
+}
+
+function getApkStatus() {
+  const hosted = findHostedApkFile();
+  if (!hosted) {
+    return {
+      available: false,
+      fileName: CANONICAL_APK_NAME,
+      sizeBytes: 0,
+      downloadPath: '/download/among-us-irl.apk',
+    };
+  }
+  const stat = fs.statSync(hosted.filePath);
+  const metaPath = resolveSafeApkPath(APK_META_NAME);
+  let meta: ApkMetaFile = {};
+  if (fs.existsSync(metaPath)) {
+    try {
+      meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as ApkMetaFile;
+    } catch {
+      meta = {};
+    }
+  }
+  const sha256 =
+    meta.sha256 && meta.sizeBytes === stat.size
+      ? meta.sha256
+      : crypto.createHash('sha256').update(fs.readFileSync(hosted.filePath)).digest('hex');
+
+  return {
+    available: true,
+    fileName: CANONICAL_APK_NAME,
+    originalFileName: meta.originalFileName || hosted.originalFileName,
+    sizeBytes: stat.size,
+    sha256,
+    updatedAt: meta.updatedAt || stat.mtime.toISOString(),
+    downloadPath: '/download/among-us-irl.apk',
+  };
+}
 
 function resolveTlsCredentials(): { key: Buffer; cert: Buffer } | null {
   const keyPath = process.env.SSL_KEY_FILE?.trim() || path.resolve(process.cwd(), 'certs', 'key.pem');
@@ -171,8 +264,8 @@ async function main() {
   const app = express();
   app.use('/api', (req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-File-Name');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -180,6 +273,46 @@ async function main() {
     next();
   });
   app.use(express.json({ limit: '64kb' }));
+
+  // Public local download route for the Android companion APK
+  app.get('/download/among-us-irl.apk', (req, res) => {
+    const hosted = findHostedApkFile();
+    if (!hosted) {
+      if (req.headers.accept?.includes('application/json')) {
+        return res.status(404).json({ error: 'Android APK has not been uploaded yet.' });
+      }
+      res.status(404).type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Android App Not Hosted Yet — AMONG-US IRL</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0B0F17; color: #F1F5F9; display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 24px; }
+    .card { max-width: 440px; width: 100%; background: #151C28; border: 1px solid rgba(255,255,255,0.12); border-radius: 18px; padding: 24px; }
+    h1 { margin: 0 0 8px; font-size: 20px; color: #FFFFFF; }
+    p { margin: 0 0 12px; font-size: 14px; line-height: 1.5; color: #94A3B8; }
+    code { background: #090D14; color: #67E8F9; padding: 2px 6px; border-radius: 6px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Android APK Not Hosted Yet</h1>
+    <p>Ask the Host PC to drop <code>among-us-irl.apk</code> into the local <code>public-apk/</code> folder or drag-and-drop it into the <strong>Android Companion App</strong> card on Mission Control.</p>
+    <p>Once uploaded, reload this link or scan the Download App QR code again.</p>
+  </div>
+</body>
+</html>`);
+      return;
+    }
+
+    const stat = fs.statSync(hosted.filePath);
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="among-us-irl.apk"');
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(hosted.filePath).pipe(res);
+  });
 
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -384,6 +517,110 @@ async function main() {
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to start discussion.' });
     }
+  });
+
+  // Host APK management (local public-apk/ folder + Mission Control drag-and-drop)
+  app.get('/api/sessions/:code/host/apk', async (req, res) => {
+    const code = sanitizeSessionCode(req.params.code);
+    const hostToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+    if (!code || !hostToken) return res.status(401).json({ error: 'Missing host credentials.' });
+    const session = await getSession(code);
+    if (!session || session.hostToken !== hostToken) {
+      return res.status(403).json({ error: 'Invalid host credentials.' });
+    }
+    res.json({ status: getApkStatus() });
+  });
+
+  app.post(
+    '/api/sessions/:code/host/apk',
+    express.raw({
+      type: ['application/vnd.android.package-archive', 'application/octet-stream'],
+      limit: '125mb',
+    }),
+    async (req, res) => {
+      try {
+        const code = sanitizeSessionCode(req.params.code);
+        const hostToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+        if (!code || !hostToken) return res.status(401).json({ error: 'Unauthorized.' });
+
+        const session = await getSession(code);
+        if (!session || session.hostToken !== hostToken) {
+          return res.status(403).json({ error: 'Invalid host credentials.' });
+        }
+
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+          return res.status(400).json({ error: 'Empty APK upload payload.' });
+        }
+        if (req.body.length > MAX_APK_BYTES) {
+          return res.status(413).json({ error: 'APK exceeds maximum 125 MB size limit.' });
+        }
+        if (!isValidApkHeader(req.body)) {
+          return res
+            .status(400)
+            .json({ error: 'Invalid file format. Please upload a compiled Android .apk package.' });
+        }
+
+        fs.mkdirSync(APK_DIR, { recursive: true });
+        let decodedHeaderName = CANONICAL_APK_NAME;
+        if (typeof req.headers['x-file-name'] === 'string') {
+          try {
+            decodedHeaderName = decodeURIComponent(req.headers['x-file-name']);
+          } catch {
+            decodedHeaderName = req.headers['x-file-name'];
+          }
+        }
+        const rawHeaderName = path.basename(decodedHeaderName).slice(0, 120);
+        const originalFileName = rawHeaderName.toLowerCase().endsWith('.apk')
+          ? rawHeaderName
+          : CANONICAL_APK_NAME;
+
+        const sha256 = crypto.createHash('sha256').update(req.body).digest('hex');
+        const tmpPath = resolveSafeApkPath(`${CANONICAL_APK_NAME}.tmp`);
+        const finalPath = resolveSafeApkPath(CANONICAL_APK_NAME);
+        const metaPath = resolveSafeApkPath(APK_META_NAME);
+
+        fs.writeFileSync(tmpPath, req.body);
+        fs.renameSync(tmpPath, finalPath);
+        fs.writeFileSync(
+          metaPath,
+          JSON.stringify(
+            {
+              originalFileName,
+              sha256,
+              sizeBytes: req.body.length,
+              updatedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ),
+        );
+
+        res.json({ status: getApkStatus() });
+      } catch (err) {
+        res.status(400).json({
+          error: err instanceof Error ? err.message : 'Failed to store uploaded APK.',
+        });
+      }
+    },
+  );
+
+  app.delete('/api/sessions/:code/host/apk', async (req, res) => {
+    const code = sanitizeSessionCode(req.params.code);
+    const hostToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+    if (!code || !hostToken) return res.status(401).json({ error: 'Unauthorized.' });
+    const session = await getSession(code);
+    if (!session || session.hostToken !== hostToken) {
+      return res.status(403).json({ error: 'Invalid host credentials.' });
+    }
+
+    if (fs.existsSync(APK_DIR)) {
+      for (const entry of fs.readdirSync(APK_DIR, { withFileTypes: true })) {
+        if (entry.isFile() && (entry.name.toLowerCase().endsWith('.apk') || entry.name === APK_META_NAME)) {
+          fs.unlinkSync(resolveSafeApkPath(entry.name));
+        }
+      }
+    }
+    res.json({ status: getApkStatus() });
   });
 
   // Player actions
