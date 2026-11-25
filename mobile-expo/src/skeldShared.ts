@@ -329,7 +329,8 @@ export type ParsedQrAction =
   | { kind: 'TASK'; sessionCode?: string; task: SkeldTaskDef }
   | { kind: 'PLAYER'; sessionCode?: string; color: PlayerColorDef }
   | { kind: 'MEETING'; sessionCode?: string }
-  | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string };
+  | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string }
+  | { kind: 'REJOIN'; sessionCode: string; rejoinCode: string; serverOrigin?: string };
 
 export function normalizeServerUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
@@ -350,10 +351,19 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
   const trimmed = rawInput.trim();
   if (!trimmed) return null;
 
-  // Check Join URL (?join=CODE) and extract server origin if present
-  if (trimmed.includes('join=')) {
+  // Check Join / Rejoin URL (?join=CODE&rejoin=REJOIN) and extract server origin if present
+  if (trimmed.includes('join=') || trimmed.includes('rejoin=')) {
     const matchOrigin = trimmed.match(/^(https?:\/\/[^/?#]+)/i);
     const matchCode = trimmed.match(/[?&]join=([A-Z0-9]{4,8})/i);
+    const matchRejoin = trimmed.match(/[?&]rejoin=([A-Z0-9]{4,10})/i);
+    if (matchCode && matchRejoin) {
+      return {
+        kind: 'REJOIN',
+        sessionCode: matchCode[1].toUpperCase(),
+        rejoinCode: matchRejoin[1].toUpperCase(),
+        serverOrigin: matchOrigin ? matchOrigin[1] : undefined,
+      };
+    }
     if (matchCode) {
       return {
         kind: 'JOIN',
@@ -370,6 +380,12 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     const sessionCode = parts[2]?.toUpperCase();
     const target = parts[3]?.toLowerCase();
 
+    if (kind === 'REJOIN' && sessionCode && parts[3]) {
+      const rejoinCode = parts[3].trim().toUpperCase();
+      if (/^[A-Z0-9]{4,8}$/.test(sessionCode) && /^[A-Z0-9]{4,10}$/.test(rejoinCode)) {
+        return { kind: 'REJOIN', sessionCode, rejoinCode };
+      }
+    }
     if (kind === 'TASK' && target) {
       const task = SKELD_TASKS.find((t) => t.id === target);
       if (task) return { kind: 'TASK', sessionCode, task };

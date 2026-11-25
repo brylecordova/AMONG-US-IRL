@@ -103,11 +103,18 @@ class MainActivity : AppCompatActivity() {
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val savedUrl = prefs.getString(KEY_LAST_HOST_URL, "") ?: ""
+        val savedSessionCode = prefs.getString(KEY_SAVED_SESSION_CODE, "") ?: ""
+        val savedRejoinCode = prefs.getString(KEY_SAVED_REJOIN_CODE, "") ?: ""
         if (savedUrl.isNotEmpty()) {
             editHostUrl.setText(savedUrl)
         }
 
         configureWebView()
+
+        if (savedUrl.isNotBlank() && savedSessionCode.isNotBlank() && savedRejoinCode.isNotBlank()) {
+            val cleanOriginUrl = extractOrigin(savedUrl) ?: savedUrl
+            connectToHostUrl(cleanOriginUrl, persistLastUrl = false)
+        }
 
         findViewById<Button>(R.id.btnScanHostQr).setOnClickListener {
             hideLauncherError()
@@ -272,6 +279,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 if (request?.isForMainFrame == true) {
                     runOnUiThread {
+                        showLauncher()
                         showLauncherError(
                             "Could not reach Host PC (${error?.description ?: "Network error"}). Check Wi-Fi and Host address."
                         )
@@ -281,7 +289,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun connectToHostUrl(rawInput: String) {
+    private fun connectToHostUrl(rawInput: String, persistLastUrl: Boolean = true) {
         val trimmed = rawInput.trim()
         val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
         val scheme = parsed?.scheme?.lowercase()
@@ -295,10 +303,12 @@ class MainActivity : AppCompatActivity() {
         hideLauncherError()
         activeOrigin = extractOrigin(trimmed)
 
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_LAST_HOST_URL, trimmed)
-            .apply()
+        if (persistLastUrl) {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(KEY_LAST_HOST_URL, trimmed)
+                .apply()
+        }
 
         txtConnectedHost.text = activeOrigin
         launcherContainer.visibility = View.GONE
@@ -407,6 +417,51 @@ class MainActivity : AppCompatActivity() {
                 performNativeHaptic(kind.orEmpty())
             }
         }
+
+        @JavascriptInterface
+        fun savePlayerSession(sessionCode: String?, rejoinCode: String?) {
+            val cleanSession = sessionCode?.trim()?.uppercase().orEmpty()
+            val cleanRejoin = rejoinCode?.trim()?.uppercase().orEmpty()
+            if (cleanSession.isBlank() || cleanRejoin.isBlank()) return
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_SAVED_SESSION_CODE, cleanSession)
+                    .putString(KEY_SAVED_REJOIN_CODE, cleanRejoin)
+                    .apply()
+            }
+        }
+
+        @JavascriptInterface
+        fun clearPlayerSession() {
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .edit()
+                    .remove(KEY_SAVED_SESSION_CODE)
+                    .remove(KEY_SAVED_REJOIN_CODE)
+                    .apply()
+            }
+        }
+
+        @JavascriptInterface
+        fun getSavedPlayerSessionJson(): String {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val sessionCode = prefs.getString(KEY_SAVED_SESSION_CODE, "")?.trim().orEmpty()
+            val rejoinCode = prefs.getString(KEY_SAVED_REJOIN_CODE, "")?.trim().orEmpty()
+            if (sessionCode.isBlank() || rejoinCode.isBlank()) return ""
+            return JSONObject().apply {
+                put("sessionCode", sessionCode)
+                put("rejoinCode", rejoinCode)
+            }.toString()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -494,5 +549,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREFS_NAME = "among_us_irl_shell"
         private const val KEY_LAST_HOST_URL = "last_host_url"
+        private const val KEY_SAVED_SESSION_CODE = "saved_session_code"
+        private const val KEY_SAVED_REJOIN_CODE = "saved_rejoin_code"
     }
 }

@@ -231,6 +231,13 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       };
     }
 
+    if (parsed.kind === 'REJOIN') {
+      return {
+        valid: false,
+        error: 'That is a Rejoin QR code. Leave your current mission first to rejoin.',
+      };
+    }
+
     if (parsed.sessionCode && parsed.sessionCode !== state.sessionCode) {
       return {
         valid: false,

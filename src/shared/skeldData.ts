@@ -359,7 +359,8 @@ export type ParsedQrAction =
   | { kind: 'TASK'; sessionCode?: string; task: SkeldTaskDef }
   | { kind: 'PLAYER'; sessionCode?: string; color: PlayerColorDef }
   | { kind: 'MEETING'; sessionCode?: string }
-  | { kind: 'JOIN'; sessionCode: string };
+  | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string }
+  | { kind: 'REJOIN'; sessionCode: string; rejoinCode: string; serverOrigin?: string };
 
 export function buildTaskQrPayload(sessionCode: string, taskId: SkeldTaskId): string {
   return `SKELD|TASK|${sessionCode.toUpperCase()}|${taskId}`;
@@ -373,21 +374,56 @@ export function buildMeetingQrPayload(sessionCode: string): string {
   return `SKELD|MEETING|${sessionCode.toUpperCase()}|CAFETERIA`;
 }
 
+export function buildRejoinUrl(
+  publicUrl: string,
+  sessionCode: string,
+  rejoinCode: string,
+): string {
+  const base = publicUrl.replace(/\/+$/, '');
+  return `${base}/?join=${encodeURIComponent(sessionCode.toUpperCase())}&rejoin=${encodeURIComponent(rejoinCode.toUpperCase())}`;
+}
+
 export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
   const trimmed = rawInput.trim();
   if (!trimmed) return null;
 
-  // Check Join URL (?join=CODE)
-  if (trimmed.includes('join=')) {
+  // Check Join / Rejoin URL (?join=CODE&rejoin=REJOIN)
+  if (trimmed.includes('join=') || trimmed.includes('rejoin=')) {
     try {
       const url = new URL(trimmed);
       const code = url.searchParams.get('join')?.trim().toUpperCase();
+      const rejoin = url.searchParams.get('rejoin')?.trim().toUpperCase();
+      const serverOrigin = url.origin;
+      if (
+        code &&
+        /^[A-Z0-9]{4,8}$/.test(code) &&
+        rejoin &&
+        /^[A-Z0-9]{4,10}$/.test(rejoin)
+      ) {
+        return { kind: 'REJOIN', sessionCode: code, rejoinCode: rejoin, serverOrigin };
+      }
       if (code && /^[A-Z0-9]{4,8}$/.test(code)) {
-        return { kind: 'JOIN', sessionCode: code };
+        return { kind: 'JOIN', sessionCode: code, serverOrigin };
       }
     } catch {
-      const match = trimmed.match(/join=([A-Z0-9]{4,8})/i);
-      if (match) return { kind: 'JOIN', sessionCode: match[1].toUpperCase() };
+      const matchOrigin = trimmed.match(/^(https?:\/\/[^/?#]+)/i);
+      const matchJoin = trimmed.match(/join=([A-Z0-9]{4,8})/i);
+      const matchRejoin = trimmed.match(/rejoin=([A-Z0-9]{4,10})/i);
+      if (matchJoin && matchRejoin) {
+        return {
+          kind: 'REJOIN',
+          sessionCode: matchJoin[1].toUpperCase(),
+          rejoinCode: matchRejoin[1].toUpperCase(),
+          serverOrigin: matchOrigin ? matchOrigin[1] : undefined,
+        };
+      }
+      if (matchJoin) {
+        return {
+          kind: 'JOIN',
+          sessionCode: matchJoin[1].toUpperCase(),
+          serverOrigin: matchOrigin ? matchOrigin[1] : undefined,
+        };
+      }
     }
   }
 
@@ -398,6 +434,12 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     const sessionCode = parts[2]?.toUpperCase();
     const target = parts[3]?.toLowerCase();
 
+    if (kind === 'REJOIN' && sessionCode && parts[3]) {
+      const rejoinCode = parts[3].trim().toUpperCase();
+      if (/^[A-Z0-9]{4,8}$/.test(sessionCode) && /^[A-Z0-9]{4,10}$/.test(rejoinCode)) {
+        return { kind: 'REJOIN', sessionCode, rejoinCode };
+      }
+    }
     if (kind === 'TASK' && target) {
       const task = SKELD_TASKS.find((t) => t.id === target);
       if (task) return { kind: 'TASK', sessionCode, task };

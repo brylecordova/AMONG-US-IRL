@@ -13,6 +13,9 @@ declare global {
       closeNativeQrScanner?: () => void;
       notifyQrValidation?: (valid: boolean, errorMessage?: string) => void;
       triggerHaptic?: (kind: string) => void;
+      savePlayerSession?: (sessionCode: string, rejoinCode: string) => void;
+      clearPlayerSession?: () => void;
+      getSavedPlayerSessionJson?: () => string;
     };
     __onAndroidQrScanned?: (rawText: string) => void;
   }

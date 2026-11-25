@@ -137,8 +137,49 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
     };
   }, [serverUrl, sessionCode]);
 
+  const performRejoinWithCodes = async (baseUrl: string, code: string, rejoin: string) => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`${baseUrl}/api/sessions/${code}/rejoin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rejoinCode: rejoin }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to rejoin mission.');
+      haptics.notify('success');
+      onJoined({
+        serverUrl: baseUrl,
+        sessionCode: code,
+        playerToken: data.playerToken,
+        state: data.state,
+      });
+    } catch (err) {
+      haptics.notify('error');
+      setErrorMsg(err instanceof Error ? err.message : 'Connection failed. Check Wi-Fi & IP.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleJoinQrDetected = (parsed: ParsedQrAction) => {
     setErrorMsg(null);
+    if (parsed.kind === 'REJOIN') {
+      haptics.notify('success');
+      setShowQrScanner(false);
+      setMode('REJOIN');
+      setSessionCode(parsed.sessionCode);
+      setRejoinCode(parsed.rejoinCode);
+      const targetUrl = normalizeServerUrl(parsed.serverOrigin || serverUrl);
+      if (parsed.serverOrigin) {
+        setServerUrl(parsed.serverOrigin);
+      }
+      if (targetUrl) {
+        void performRejoinWithCodes(targetUrl, parsed.sessionCode, parsed.rejoinCode);
+      }
+      return { valid: true };
+    }
     if (parsed.kind === 'JOIN') {
       haptics.notify('success');
       setShowQrScanner(false);
@@ -157,7 +198,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
     haptics.notify('error');
     return {
       valid: false,
-      error: 'Please scan the Host PC "Join Mission" QR code.',
+      error: 'Please scan the Host PC "Join Mission" or "Rejoin" QR code.',
     };
   };
 
