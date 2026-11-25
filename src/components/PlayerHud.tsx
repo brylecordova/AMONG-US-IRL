@@ -35,6 +35,7 @@ import { SkeldTaskIconBadge } from './PrintedQrCards';
 import { QrScannerModal, QrScanValidationResult } from './QrScannerModal';
 import { RoleSplashModal } from './RoleSplashModal';
 import { SkeldTaskModal } from './tasks/SkeldTaskModal';
+import { haptics } from '../utils/haptics';
 import { soundEngine } from '../utils/sound';
 
 interface PlayerHudProps {
@@ -129,6 +130,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   useEffect(() => {
     if (killedAlertTrigger > 0) {
       soundEngine.playKillAlert();
+      haptics.event('killed');
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
@@ -140,6 +142,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   useEffect(() => {
     if (meetingAlertTrigger > 0) {
       soundEngine.playEmergencyAlarm();
+      haptics.event('alarm');
       setActiveTask(null);
       setScannerMode(null);
       setDeadBodyFound(null);
@@ -150,6 +153,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   useEffect(() => {
     if (sabotageAlertTrigger > 0) {
       soundEngine.playSabotageAlarm();
+      haptics.event('sabotage');
     }
   }, [sabotageAlertTrigger]);
 
@@ -159,6 +163,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       activeTask &&
       activeTask.id !== 'fix-wiring'
     ) {
+      haptics.notify('warning');
       setActiveTask(null);
       const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
       setToastMsg(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
@@ -198,13 +203,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const didPlayerWin = state.winner === 'IMPOSTORS' ? isImpostorTeam : !isImpostorTeam;
   const myColor = getColorDef(state.self.color);
 
-  // Play victory or defeat sound when game ends
+  // Play victory or defeat sound & haptics when game ends
   useEffect(() => {
     if (state.phase === 'ENDED') {
       if (didPlayerWin) {
         soundEngine.playVictory();
+        haptics.notify('success');
       } else {
         soundEngine.playDefeat();
+        haptics.notify('error');
       }
     }
   }, [state.phase, didPlayerWin]);
@@ -215,6 +222,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   };
 
   const toggleMute = () => {
+    haptics.selection();
     const next = !muted;
     soundEngine.setMuted(next);
     setMuted(next);
@@ -311,21 +319,25 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         const outcome = data.outcome;
         if (outcome.kind === 'KILL_EXECUTED') {
           soundEngine.playKillAlert();
+          haptics.impact('heavy');
           showToast(`Eliminated ${outcome.victimName} (${getColorDef(outcome.victimColor).label}).`);
         } else if (outcome.kind === 'DEAD_BODY_FOUND') {
           soundEngine.playClick();
+          haptics.notify('warning');
           setDeadBodyFound({
             victimName: outcome.victimName,
             victimColor: outcome.victimColor,
           });
         } else if (outcome.kind === 'INVESTIGATE_RESULT') {
           soundEngine.playInvestigateScan();
+          haptics.notify('success');
           setForensicResult({
             targetName: outcome.targetName,
             targetColor: outcome.targetColor,
             reportedAlignment: outcome.reportedAlignment,
           });
         } else if (outcome.kind === 'ID_CHECK') {
+          haptics.impact('light');
           showToast(
             `${outcome.targetName} (${getColorDef(outcome.targetColor).label}) is ${
               outcome.alive ? 'alive' : 'dead'
@@ -346,6 +358,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
   const handleTriggerSabotage = async (kind: SabotageKind) => {
     soundEngine.playClick();
+    haptics.impact('heavy');
     setSabotageBusy(true);
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/sabotage`, {
@@ -358,6 +371,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('warning');
       onUpdateState(data.state);
       showToast(
         kind === 'BLACKOUT'
@@ -365,6 +379,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           : 'Signal Jam triggered! Emergency Meetings disabled for 60s.',
       );
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to trigger sabotage.');
     } finally {
       setSabotageBusy(false);
@@ -386,6 +401,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
       if (data.powerRestored) {
         soundEngine.playTaskSuccess();
@@ -398,12 +414,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         );
       }
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Could not submit task.');
     }
   };
 
   const handleMarkHere = async () => {
     soundEngine.playClick();
+    haptics.impact('heavy');
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/arrive`, {
         method: 'POST',
@@ -411,8 +429,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Check-in failed.');
     }
   };
@@ -420,6 +440,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const handleSwitchLobbyColor = async (colorId: PlayerColorId) => {
     if (colorBusy || colorId === state.self.color) return;
     soundEngine.playClick();
+    haptics.selection();
     setColorBusy(true);
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/player/color`, {
@@ -434,6 +455,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       if (!res.ok) throw new Error(data.error);
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to switch suit color.');
     } finally {
       setColorBusy(false);
@@ -443,6 +465,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const handleReportDeadBody = async () => {
     if (!deadBodyFound || reportingBody) return;
     soundEngine.playClick();
+    haptics.impact('heavy');
     setReportingBody(true);
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/scan-player`, {
@@ -461,6 +484,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setDeadBodyFound(null);
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to report dead body.');
     } finally {
       setReportingBody(false);
@@ -470,6 +494,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const handleVoteNow = async () => {
     if (voteNowBusy) return;
     soundEngine.playClick();
+    haptics.impact('medium');
     setVoteNowBusy(true);
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/vote-now`, {
@@ -478,8 +503,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Vote Now failed.');
     } finally {
       setVoteNowBusy(false);
@@ -488,6 +515,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
   const handleCastVote = async (target: string) => {
     soundEngine.playClick();
+    haptics.impact('medium');
     try {
       const res = await fetch(`/api/sessions/${state.sessionCode}/meeting/vote`, {
         method: 'POST',
@@ -499,8 +527,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Vote failed.');
     }
   };
@@ -517,9 +547,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       : 0;
 
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col pb-28">
+    <div
+      className={`min-h-dvh bg-[#0B0F17] text-slate-100 flex flex-col ${
+        state.phase === 'PLAYING'
+          ? 'pb-[calc(5.75rem+env(safe-area-inset-bottom))]'
+          : 'pb-[max(1.5rem,env(safe-area-inset-bottom))]'
+      }`}
+    >
       {/* Compact Mobile Telemetry Bar (<= 15% cap) */}
-      <header className="sticky top-0 z-30 h-14 bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 px-4 flex items-center justify-between gap-3">
+      <header className="sticky top-0 z-30 min-h-14 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] bg-[#0F1520]/95 backdrop-blur-md border-b border-white/10 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <CrewmateAvatar
             color={state.self.color}
@@ -589,7 +625,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       </AnimatePresence>
 
       {/* MAIN PHASE VIEW */}
-      <main className="flex-1 max-w-xl w-full mx-auto p-4 space-y-4">
+      <main className="flex-1 max-w-xl w-full mx-auto py-4 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] space-y-4">
         <AnimatePresence mode="wait">
           {/* LOBBY WAITING ROOM */}
           {state.phase === 'LOBBY' && (
@@ -676,7 +712,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
               <button
                 type="button"
-                onClick={onLeaveSession}
+                onClick={() => {
+                  haptics.impact('light');
+                  onLeaveSession();
+                }}
                 className="w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-400"
               >
                 Leave Lobby
@@ -747,7 +786,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     {state.activeSabotage.kind === 'BLACKOUT' && state.self.alive && (
                       <button
                         type="button"
-                        onClick={() => setScannerMode('AUTO')}
+                        onClick={() => {
+                          haptics.impact('medium');
+                          setScannerMode('AUTO');
+                        }}
                         className="w-full min-h-[44px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
                       >
                         <QrCode className="w-4 h-4" />
@@ -1470,12 +1512,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
       {/* IDENTICAL BOTTOM THUMB-ZONE ACTION BAR FOR ALL ROLES */}
       {state.phase === 'PLAYING' && (
-        <div className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F1520]/95 backdrop-blur-md border-t border-white/10 p-3">
+        <div className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F1520]/95 backdrop-blur-md border-t border-white/10 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
           <div className="max-w-xl mx-auto flex gap-2.5">
             <motion.button
               type="button"
               whileTap={{ scale: 0.96 }}
-              onClick={() => setScannerMode('AUTO')}
+              onClick={() => {
+                haptics.impact('medium');
+                setScannerMode('AUTO');
+              }}
               className="flex-1 min-h-[50px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2"
             >
               <QrCode className="w-5 h-5" />
@@ -1487,6 +1532,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               whileTap={{ scale: 0.96 }}
               onClick={() => {
                 soundEngine.playClick();
+                haptics.impact('light');
                 setTerminalUnlocked(false);
                 setShowTerminal(true);
               }}
@@ -1519,14 +1565,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center pt-[env(safe-area-inset-top)] sm:p-4"
           >
             <motion.div
               initial={{ opacity: 0, y: 30, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 24, scale: 0.97 }}
               transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-              className="w-full max-w-md bg-[#151C28] border border-white/15 rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden"
+              className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-0.5rem)] sm:max-h-[92dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-t-3xl sm:rounded-2xl shadow-2xl"
             >
               <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 bg-[#0F1520]">
                 <div className="flex items-center gap-2.5">
@@ -1543,6 +1589,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    haptics.impact('light');
                     setTerminalUnlocked(false);
                     setShowTerminal(false);
                   }}
@@ -1553,7 +1600,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 </button>
               </div>
 
-              <div className="p-5 space-y-4">
+              <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-4">
                 {!terminalUnlocked ? (
                   <div className="text-center space-y-4 py-4">
                     <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-900 border border-white/10 flex items-center justify-center">
@@ -1572,6 +1619,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       whileTap={{ scale: 0.97 }}
                       onClick={() => {
                         soundEngine.playClick();
+                        haptics.impact('medium');
                         setTerminalUnlocked(true);
                       }}
                       className="w-full min-h-[50px] rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2"
@@ -1708,6 +1756,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        haptics.impact('light');
                         setTerminalUnlocked(false);
                         setShowTerminal(false);
                       }}
@@ -1764,14 +1813,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94 }}
               transition={{ type: 'spring', stiffness: 320, damping: 24 }}
-              className="w-full max-w-sm bg-[#151C28] border-2 border-cyan-400 rounded-2xl p-6 text-center space-y-4 shadow-2xl"
+              className="w-full max-w-sm max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#151C28] border-2 border-cyan-400 rounded-2xl p-6 text-center space-y-4 shadow-2xl"
             >
               <div className="flex items-center justify-center gap-2 text-cyan-300 font-mono text-xs font-bold">
                 <Eye className="w-4 h-4" />
@@ -1806,7 +1855,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
               <button
                 type="button"
-                onClick={() => setForensicResult(null)}
+                onClick={() => {
+                  haptics.impact('light');
+                  setForensicResult(null);
+                }}
                 className="w-full py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm"
               >
                 Close Readout
@@ -1823,14 +1875,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94 }}
               transition={{ type: 'spring', stiffness: 320, damping: 24 }}
-              className="w-full max-w-sm bg-[#1B0D12] border-2 border-red-500 rounded-2xl p-6 text-center space-y-4 shadow-2xl"
+              className="w-full max-w-sm max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] overflow-y-auto bg-[#1B0D12] border-2 border-red-500 rounded-2xl p-6 text-center space-y-4 shadow-2xl"
             >
               <div className="flex items-center justify-center gap-2 text-red-400 font-mono text-xs font-bold">
                 <ShieldAlert className="w-4 h-4" />
@@ -1866,7 +1918,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               <button
                 type="button"
                 disabled={reportingBody}
-                onClick={() => setDeadBodyFound(null)}
+                onClick={() => {
+                  haptics.impact('light');
+                  setDeadBodyFound(null);
+                }}
                 className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-xs"
               >
                 Dismiss (Do Not Report)
@@ -1883,14 +1938,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-[#1B0609]/95 backdrop-blur-md flex items-center justify-center p-5"
+            className="fixed inset-0 z-50 bg-[#1B0609]/95 backdrop-blur-md flex items-center justify-center pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] px-5"
           >
             <motion.div
               initial={{ scale: 0.8, rotate: -3, opacity: 0 }}
               animate={{ scale: 1, rotate: 0, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               transition={{ type: 'spring', stiffness: 320, damping: 20 }}
-              className="w-full max-w-sm bg-[#24090D] border-2 border-red-500 rounded-2xl p-6 text-center space-y-5 shadow-2xl"
+              className="w-full max-w-sm max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2.5rem)] overflow-y-auto bg-[#24090D] border-2 border-red-500 rounded-2xl p-6 text-center space-y-5 shadow-2xl"
             >
               {/* Cracked Visor + Skull Vector Emblem */}
               <motion.svg
@@ -1930,7 +1985,10 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowKilledModal(false)}
+                onClick={() => {
+                  haptics.impact('light');
+                  setShowKilledModal(false);
+                }}
                 className="w-full py-3.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm"
               >
                 Enter Ghost Mode

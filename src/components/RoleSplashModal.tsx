@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { ShieldCheck } from 'lucide-react';
 import { getColorDef, PlayerColorId, SecretRole } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
+import { haptics } from '../utils/haptics';
 import { soundEngine } from '../utils/sound';
 
 interface RoleSplashModalProps {
@@ -25,6 +26,7 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
   const isInvestigator = secretRole === 'INVESTIGATOR';
 
   useEffect(() => {
+    haptics.impact('light');
     const timer = setTimeout(() => {
       setStage('REVEAL');
     }, 1150);
@@ -34,6 +36,7 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
   useEffect(() => {
     if (stage === 'REVEAL') {
       soundEngine.playRoleReveal(isImpostor);
+      haptics.impact(isImpostor ? 'heavy' : 'medium');
     }
   }, [stage, isImpostor]);
 
@@ -54,7 +57,7 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 bg-[#05070C] flex items-center justify-center p-5 overflow-hidden select-none"
+      className="fixed inset-0 z-50 bg-[#05070C] flex items-center justify-center overflow-y-auto pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1.25rem,env(safe-area-inset-left))] pr-[max(1.25rem,env(safe-area-inset-right))] select-none"
     >
       <AnimatePresence mode="wait">
         {stage === 'SHH' ? (
@@ -197,6 +200,7 @@ export const RoleSplashModal: React.FC<RoleSplashModalProps> = ({
               whileTap={{ scale: 0.96 }}
               onClick={() => {
                 soundEngine.playClick();
+                haptics.impact('medium');
                 onDismiss();
               }}
               className="w-full min-h-[54px] rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-bold text-base shadow-xl"

@@ -6,8 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.View
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -23,6 +28,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
@@ -79,14 +88,18 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureSystemBars()
         setContentView(R.layout.activity_main)
 
         launcherContainer = findViewById(R.id.launcherContainer)
         webContainer = findViewById(R.id.webContainer)
+        val webToolbar = findViewById<View>(R.id.webToolbar)
         editHostUrl = findViewById(R.id.editHostUrl)
         launcherErrorText = findViewById(R.id.launcherErrorText)
         txtConnectedHost = findViewById(R.id.txtConnectedHost)
         webView = findViewById(R.id.missionWebView)
+
+        applySafeSystemBarInsets(webToolbar)
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val savedUrl = prefs.getString(KEY_LAST_HOST_URL, "") ?: ""
@@ -143,6 +156,63 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    private fun configureSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+    }
+
+    private fun applySafeSystemBarInsets(webToolbar: View) {
+        val toolbarLeft = webToolbar.paddingLeft
+        val toolbarTop = webToolbar.paddingTop
+        val toolbarRight = webToolbar.paddingRight
+        val toolbarBottom = webToolbar.paddingBottom
+
+        val launcherLeft = launcherContainer.paddingLeft
+        val launcherTop = launcherContainer.paddingTop
+        val launcherRight = launcherContainer.paddingRight
+        val launcherBottom = launcherContainer.paddingBottom
+
+        val rootView = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { _, insets ->
+            val safeBars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val bottomInset = maxOf(safeBars.bottom, ime.bottom)
+
+            webToolbar.setPadding(
+                toolbarLeft,
+                toolbarTop + safeBars.top,
+                toolbarRight,
+                toolbarBottom
+            )
+
+            webContainer.setPadding(
+                safeBars.left,
+                0,
+                safeBars.right,
+                bottomInset
+            )
+
+            launcherContainer.setPadding(
+                launcherLeft + safeBars.left,
+                launcherTop + safeBars.top,
+                launcherRight + safeBars.right,
+                launcherBottom + bottomInset
+            )
+
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(rootView)
     }
 
     override fun onDestroy() {
@@ -233,6 +303,7 @@ class MainActivity : AppCompatActivity() {
         txtConnectedHost.text = activeOrigin
         launcherContainer.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
+        ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
         webView.loadUrl(trimmed)
     }
 
@@ -242,6 +313,7 @@ class MainActivity : AppCompatActivity() {
         webView.stopLoading()
         webContainer.visibility = View.GONE
         launcherContainer.visibility = View.VISIBLE
+        ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
     }
 
     private fun showLauncherError(message: String) {
@@ -323,6 +395,99 @@ class MainActivity : AppCompatActivity() {
                 }
                 sendValidationBroadcast(valid, errorMessage.orEmpty())
             }
+        }
+
+        @JavascriptInterface
+        fun triggerHaptic(kind: String?) {
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                performNativeHaptic(kind.orEmpty())
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun performNativeHaptic(kind: String) {
+        val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        if (vibrator == null || !vibrator.hasVibrator()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val predefined = when (kind) {
+                "selection", "light" -> VibrationEffect.EFFECT_TICK
+                "medium" -> VibrationEffect.EFFECT_CLICK
+                "heavy" -> VibrationEffect.EFFECT_HEAVY_CLICK
+                else -> null
+            }
+            if (predefined != null) {
+                vibrator.vibrate(VibrationEffect.createPredefined(predefined))
+                return
+            }
+        }
+
+        val pattern: LongArray
+        val amplitudes: IntArray
+        when (kind) {
+            "selection" -> {
+                pattern = longArrayOf(0, 10)
+                amplitudes = intArrayOf(0, 80)
+            }
+            "light" -> {
+                pattern = longArrayOf(0, 16)
+                amplitudes = intArrayOf(0, 110)
+            }
+            "medium" -> {
+                pattern = longArrayOf(0, 28)
+                amplitudes = intArrayOf(0, 175)
+            }
+            "heavy" -> {
+                pattern = longArrayOf(0, 45)
+                amplitudes = intArrayOf(0, 240)
+            }
+            "success" -> {
+                pattern = longArrayOf(0, 18, 45, 32)
+                amplitudes = intArrayOf(0, 140, 0, 220)
+            }
+            "warning" -> {
+                pattern = longArrayOf(0, 35, 55, 35)
+                amplitudes = intArrayOf(0, 190, 0, 190)
+            }
+            "error" -> {
+                pattern = longArrayOf(0, 45, 45, 45, 45, 65)
+                amplitudes = intArrayOf(0, 220, 0, 220, 0, 255)
+            }
+            "alarm" -> {
+                pattern = longArrayOf(0, 140, 80, 140, 80, 180)
+                amplitudes = intArrayOf(0, 230, 0, 230, 0, 255)
+            }
+            "killed" -> {
+                pattern = longArrayOf(0, 220, 90, 320)
+                amplitudes = intArrayOf(0, 255, 0, 255)
+            }
+            "sabotage" -> {
+                pattern = longArrayOf(0, 160, 85, 160)
+                amplitudes = intArrayOf(0, 220, 0, 240)
+            }
+            else -> {
+                pattern = longArrayOf(0, 20)
+                amplitudes = intArrayOf(0, 150)
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (pattern.size == 2) {
+                vibrator.vibrate(VibrationEffect.createOneShot(pattern[1], amplitudes[1]))
+            } else {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1))
+            }
+        } else {
+            vibrator.vibrate(pattern, -1)
         }
     }
 

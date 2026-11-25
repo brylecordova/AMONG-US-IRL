@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   buildWsUrl,
   ClientGameState,
@@ -21,6 +22,7 @@ import {
 } from '../skeldShared';
 import { AnimatedCrewmate } from '../components/AnimatedCrewmate';
 import { NativeQrScannerModal } from '../components/NativeQrScannerModal';
+import { haptics } from '../haptics';
 
 interface JoinScreenProps {
   initialServerUrl: string;
@@ -33,6 +35,7 @@ interface JoinScreenProps {
 }
 
 export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoined }) => {
+  const insets = useSafeAreaInsets();
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [sessionCode, setSessionCode] = useState('');
   const [mode, setMode] = useState<'NEW' | 'REJOIN'>('NEW');
@@ -137,6 +140,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
   const handleJoinQrDetected = (parsed: ParsedQrAction) => {
     setErrorMsg(null);
     if (parsed.kind === 'JOIN') {
+      haptics.notify('success');
       setShowQrScanner(false);
       setSessionCode(parsed.sessionCode);
       if (parsed.serverOrigin) {
@@ -145,10 +149,12 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
       return { valid: true };
     }
     if (parsed.sessionCode) {
+      haptics.notify('success');
       setShowQrScanner(false);
       setSessionCode(parsed.sessionCode);
       return { valid: true };
     }
+    haptics.notify('error');
     return {
       valid: false,
       error: 'Please scan the Host PC "Join Mission" QR code.',
@@ -159,14 +165,17 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
     const baseUrl = normalizeServerUrl(serverUrl);
     const cleanCode = sessionCode.trim().toUpperCase();
     if (!baseUrl) {
+      haptics.notify('error');
       setErrorMsg('Enter your Host PC LAN address (e.g., http://192.168.1.42:3000).');
       return;
     }
     if (!cleanCode) {
+      haptics.notify('error');
       setErrorMsg('Enter or scan the Mission Code from the Host PC.');
       return;
     }
 
+    haptics.impact('medium');
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -179,6 +188,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Unable to join mission.');
+        haptics.notify('success');
         onJoined({
           serverUrl: baseUrl,
           sessionCode: cleanCode,
@@ -194,6 +204,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Unable to rejoin mission.');
+        haptics.notify('success');
         onJoined({
           serverUrl: baseUrl,
           sessionCode: cleanCode,
@@ -202,6 +213,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
         });
       }
     } catch (err) {
+      haptics.notify('error');
       setErrorMsg(err instanceof Error ? err.message : 'Connection failed. Check Wi-Fi & IP.');
     } finally {
       setLoading(false);
@@ -213,7 +225,18 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingTop: Math.max(insets.top + 16, 24),
+            paddingBottom: Math.max(insets.bottom + 24, 32),
+            paddingLeft: Math.max(insets.left + 16, 16),
+            paddingRight: Math.max(insets.right + 16, 16),
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         <Animated.View
           style={[
             styles.card,
@@ -231,7 +254,10 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
           <TouchableOpacity
             style={styles.scanHostBtn}
             activeOpacity={0.85}
-            onPress={() => setShowQrScanner(true)}
+            onPress={() => {
+              haptics.impact('light');
+              setShowQrScanner(true);
+            }}
           >
             <Text style={styles.scanHostBtnText}>Scan Host PC Join QR Code</Text>
           </TouchableOpacity>
@@ -263,6 +289,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
             <TouchableOpacity
               style={[styles.segmentBtn, mode === 'NEW' && styles.segmentActive]}
               onPress={() => {
+                haptics.selection();
                 setMode('NEW');
                 setErrorMsg(null);
               }}
@@ -274,6 +301,7 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
             <TouchableOpacity
               style={[styles.segmentBtn, mode === 'REJOIN' && styles.segmentActive]}
               onPress={() => {
+                haptics.selection();
                 setMode('REJOIN');
                 setErrorMsg(null);
               }}
@@ -305,7 +333,10 @@ export const JoinScreen: React.FC<JoinScreenProps> = ({ initialServerUrl, onJoin
                     <TouchableOpacity
                       key={c.id}
                       disabled={taken}
-                      onPress={() => setSelectedColor(c.id)}
+                      onPress={() => {
+                        haptics.selection();
+                        setSelectedColor(c.id);
+                      }}
                       style={[
                         styles.colorCell,
                         {
@@ -374,9 +405,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0B0F17',
   },
   scroll: {
-    paddingTop: 56,
-    paddingBottom: 40,
-    paddingHorizontal: 16,
+    flexGrow: 1,
   },
   card: {
     backgroundColor: '#131A26',

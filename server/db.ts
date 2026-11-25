@@ -70,8 +70,6 @@ export interface StoredSession {
 const LOCAL_DATA_DIR = path.resolve(process.cwd(), '.skeld-data');
 const LOCAL_SESSIONS_FILE = path.join(LOCAL_DATA_DIR, 'sessions.json');
 
-let mongoClient: MongoClient | null = null;
-let mongoDb: Db | null = null;
 let sessionsCollection: Collection<StoredSession> | null = null;
 let dbMode: 'mongodb' | 'local-fallback' = 'local-fallback';
 
@@ -118,8 +116,6 @@ export async function initDatabase(): Promise<'mongodb' | 'local-fallback'> {
   const dbName = process.env.MONGODB_DB_NAME?.trim() || 'skeld_irl';
 
   if (!configuredUri) {
-    mongoClient = null;
-    mongoDb = null;
     sessionsCollection = null;
     dbMode = 'local-fallback';
     loadLocalFileIntoCache();
@@ -133,11 +129,10 @@ export async function initDatabase(): Promise<'mongodb' | 'local-fallback'> {
       connectTimeoutMS: 2500,
     });
     await client.connect();
-    await client.db(dbName).command({ ping: 1 });
+    const db: Db = client.db(dbName);
+    await db.command({ ping: 1 });
 
-    mongoClient = client;
-    mongoDb = client.db(dbName);
-    sessionsCollection = mongoDb.collection<StoredSession>('sessions');
+    sessionsCollection = db.collection<StoredSession>('sessions');
     await sessionsCollection.createIndex({ sessionCode: 1 }, { unique: true });
     await sessionsCollection.createIndex({ updatedAt: -1 });
 
@@ -145,8 +140,6 @@ export async function initDatabase(): Promise<'mongodb' | 'local-fallback'> {
     console.log(`[DB] Connected to MongoDB (${dbName})`);
     return dbMode;
   } catch {
-    mongoClient = null;
-    mongoDb = null;
     sessionsCollection = null;
     dbMode = 'local-fallback';
     loadLocalFileIntoCache();
@@ -213,10 +206,4 @@ export async function getActiveSessionCodes(): Promise<string[]> {
     }
   }
   return Array.from(memoryCache.keys());
-}
-
-export async function closeDatabase(): Promise<void> {
-  if (mongoClient) {
-    await mongoClient.close();
-  }
 }

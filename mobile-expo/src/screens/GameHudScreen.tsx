@@ -7,9 +7,9 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  Vibration,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ClientGameState,
   getColorDef,
@@ -25,6 +25,7 @@ import { AnimatedCrewmate } from '../components/AnimatedCrewmate';
 import { NativeQrScannerModal } from '../components/NativeQrScannerModal';
 import { RoleSplashOverlay } from '../components/RoleSplashOverlay';
 import { TaskMiniGamesModal } from '../components/TaskMiniGamesModal';
+import { haptics } from '../haptics';
 
 interface GameHudScreenProps {
   serverUrl: string;
@@ -55,6 +56,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   onUpdateState,
   onLeaveSession,
 }) => {
+  const insets = useSafeAreaInsets();
   const [showRoleSplash, setShowRoleSplash] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [activeTask, setActiveTask] = useState<SkeldTaskDef | null>(null);
@@ -137,7 +139,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   useEffect(() => {
     if (killedAlertTrigger > 0) {
-      Vibration.vibrate([0, 300, 120, 400]);
+      haptics.event('killed');
       setActiveTask(null);
       setShowScanner(false);
       setDeadBodyFound(null);
@@ -147,7 +149,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   useEffect(() => {
     if (meetingAlertTrigger > 0) {
-      Vibration.vibrate([0, 220, 120, 220]);
+      haptics.event('alarm');
       setActiveTask(null);
       setShowScanner(false);
       setDeadBodyFound(null);
@@ -156,7 +158,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   useEffect(() => {
     if (sabotageAlertTrigger > 0) {
-      Vibration.vibrate([0, 250, 100, 250]);
+      haptics.event('sabotage');
     }
   }, [sabotageAlertTrigger]);
 
@@ -166,6 +168,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       activeTask &&
       activeTask.id !== 'fix-wiring'
     ) {
+      haptics.notify('warning');
       setActiveTask(null);
       const codeHint = state.settings.hideManualCodes ? '' : ' (WIR1)';
       showToast(`Power Blackout! Scan Fix Wiring${codeHint} to restore power first.`);
@@ -209,6 +212,12 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   const didPlayerWin = state.winner === 'IMPOSTORS' ? isImpostorTeam : !isImpostorTeam;
   const myColor = getColorDef(state.self.color);
 
+  useEffect(() => {
+    if (state.phase === 'ENDED') {
+      haptics.notify(didPlayerWin ? 'success' : 'error');
+    }
+  }, [state.phase, didPlayerWin]);
+
   const signalJamLeftSec =
     state.activeSabotage?.kind === 'SIGNAL_JAM' && state.activeSabotage.expiresAt
       ? Math.max(0, Math.ceil((state.activeSabotage.expiresAt - nowMs) / 1000))
@@ -246,12 +255,14 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         }
       }
       setShowScanner(false);
+      haptics.notify('success');
       setActiveTask(parsed.task);
       return { valid: true };
     }
 
     if (parsed.kind === 'MEETING') {
       if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
+        haptics.notify('error');
         return {
           valid: false,
           error: `Signal Jam active! Meetings disabled for ${signalJamLeftSec}s.`,
@@ -264,10 +275,12 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
+        haptics.notify('success');
         setShowScanner(false);
         onUpdateState(data.state);
         return { valid: true };
       } catch (err) {
+        haptics.notify('error');
         return {
           valid: false,
           error: err instanceof Error ? err.message : 'Unable to call meeting.',
@@ -292,26 +305,30 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
         const outcome = data.outcome;
         if (outcome.kind === 'KILL_EXECUTED') {
-          Vibration.vibrate(180);
+          haptics.impact('heavy');
           showToast(`Eliminated ${outcome.victimName} (${outcome.victimColor.toUpperCase()}).`);
         } else if (outcome.kind === 'DEAD_BODY_FOUND') {
+          haptics.notify('warning');
           setDeadBodyFound({
             victimName: outcome.victimName,
             victimColor: outcome.victimColor,
           });
         } else if (outcome.kind === 'INVESTIGATE_RESULT') {
+          haptics.notify('success');
           setForensicResult({
             targetName: outcome.targetName,
             targetColor: outcome.targetColor,
             reportedAlignment: outcome.reportedAlignment,
           });
         } else if (outcome.kind === 'ID_CHECK') {
+          haptics.impact('light');
           showToast(
             `${outcome.targetName} — Suit: ${getColorDef(outcome.targetColor).label} (${outcome.alive ? 'Alive' : 'Dead'})`,
           );
         }
         return { valid: true };
       } catch (err) {
+        haptics.notify('error');
         return {
           valid: false,
           error: err instanceof Error ? err.message : 'Scan rejected.',
@@ -319,6 +336,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       }
     }
 
+    haptics.notify('error');
     return { valid: false, error: 'Unrecognized QR code.' };
   };
 
@@ -337,6 +355,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
       if (data.powerRestored) {
         showToast('Fix Wiring complete! Ship power restored.');
@@ -344,12 +363,14 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         showToast(`Task station verified (${finished.name}).`);
       }
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Failed to log task.');
     }
   };
 
   const handleTriggerSabotage = async (kind: SabotageKind) => {
     if (sabotageBusy) return;
+    haptics.impact('heavy');
     setSabotageBusy(true);
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/sabotage`, {
@@ -362,6 +383,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('warning');
       onUpdateState(data.state);
       setShowTerminal(false);
       setTerminalUnlocked(false);
@@ -371,6 +393,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
           : 'SIGNAL JAM triggered! Emergency Meetings disabled for 60s.',
       );
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Sabotage failed.');
     } finally {
       setSabotageBusy(false);
@@ -379,6 +402,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   const handleReportDeadBody = async () => {
     if (!deadBodyFound || reportingBody) return;
+    haptics.impact('heavy');
     setReportingBody(true);
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/scan-player`, {
@@ -394,6 +418,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       setDeadBodyFound(null);
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to report body.');
     } finally {
       setReportingBody(false);
@@ -402,6 +427,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
   const handleVoteNow = async () => {
     if (voteNowBusy) return;
+    haptics.impact('medium');
     setVoteNowBusy(true);
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/vote-now`, {
@@ -410,8 +436,10 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Vote Now failed.');
     } finally {
       setVoteNowBusy(false);
@@ -419,6 +447,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   };
 
   const handleArrive = async () => {
+    haptics.impact('heavy');
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/arrive`, {
         method: 'POST',
@@ -426,14 +455,17 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Check-in failed.');
     }
   };
 
   const handleSwitchLobbyColor = async (colorId: PlayerColorId) => {
     if (colorBusy || colorId === state.self.color) return;
+    haptics.selection();
     setColorBusy(true);
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/player/color`, {
@@ -448,6 +480,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       if (!res.ok) throw new Error(data.error);
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Unable to switch suit color.');
     } finally {
       setColorBusy(false);
@@ -455,6 +488,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   };
 
   const handleVote = async (target: string) => {
+    haptics.impact('medium');
     try {
       const res = await fetch(`${serverUrl}/api/sessions/${state.sessionCode}/meeting/vote`, {
         method: 'POST',
@@ -466,8 +500,10 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      haptics.notify('success');
       onUpdateState(data.state);
     } catch (err) {
+      haptics.notify('error');
       showToast(err instanceof Error ? err.message : 'Vote failed.');
     }
   };
@@ -492,10 +528,26 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         : 0
     : 0;
 
+  const modalSafePadding = {
+    paddingTop: Math.max(insets.top + 16, 18),
+    paddingBottom: Math.max(insets.bottom + 16, 18),
+    paddingLeft: Math.max(insets.left + 16, 18),
+    paddingRight: Math.max(insets.right + 16, 18),
+  };
+
   return (
     <View style={styles.screen}>
       {/* Compact Header */}
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: Math.max(insets.top + 10, 14),
+            paddingLeft: Math.max(insets.left + 16, 16),
+            paddingRight: Math.max(insets.right + 16, 16),
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <AnimatedCrewmate color={state.self.color} alive={state.self.alive} size={42} animate={state.self.alive} />
           <View>
@@ -515,12 +567,32 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       </View>
 
       {toastMsg ? (
-        <View style={styles.toast}>
+        <View
+          style={[
+            styles.toast,
+            {
+              marginLeft: Math.max(insets.left + 16, 16),
+              marginRight: Math.max(insets.right + 16, 16),
+            },
+          ]}
+        >
           <Text style={styles.toastText}>{toastMsg}</Text>
         </View>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingLeft: Math.max(insets.left + 16, 16),
+            paddingRight: Math.max(insets.right + 16, 16),
+            paddingBottom:
+              state.phase === 'PLAYING'
+                ? Math.max(insets.bottom + 104, 112)
+                : Math.max(insets.bottom + 24, 32),
+          },
+        ]}
+      >
         {/* LOBBY PHASE */}
         {state.phase === 'LOBBY' ? (
           <View style={styles.panel}>
@@ -1043,11 +1115,23 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
       {/* IDENTICAL 2-BUTTON STEALTH ACTION BAR */}
       {state.phase === 'PLAYING' ? (
-        <View style={styles.bottomBar}>
+        <View
+          style={[
+            styles.bottomBar,
+            {
+              paddingBottom: Math.max(insets.bottom + 12, 16),
+              paddingLeft: Math.max(insets.left + 16, 16),
+              paddingRight: Math.max(insets.right + 16, 16),
+            },
+          ]}
+        >
           <TouchableOpacity
             style={styles.scanActionBtn}
             activeOpacity={0.85}
-            onPress={() => setShowScanner(true)}
+            onPress={() => {
+              haptics.impact('medium');
+              setShowScanner(true);
+            }}
           >
             <Text style={styles.scanActionText}>Scan QR</Text>
           </TouchableOpacity>
@@ -1055,6 +1139,7 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
             style={styles.terminalActionBtn}
             activeOpacity={0.85}
             onPress={() => {
+              haptics.impact('light');
               setTerminalUnlocked(false);
               setShowTerminal(true);
             }}
@@ -1069,18 +1154,20 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         visible={showTerminal}
         animationType="slide"
         transparent
+        statusBarTranslucent
         onRequestClose={() => {
           setShowTerminal(false);
           setTerminalUnlocked(false);
         }}
       >
-        <View style={styles.modalBackdrop}>
+        <View style={[styles.modalBackdrop, modalSafePadding]}>
           <View style={styles.modalCard}>
             <View style={styles.rowBetween}>
               <Text style={styles.panelTitle}>Ship Terminal</Text>
               <TouchableOpacity
                 style={styles.leaveBtn}
                 onPress={() => {
+                  haptics.impact('light');
                   setShowTerminal(false);
                   setTerminalUnlocked(false);
                 }}
@@ -1097,7 +1184,10 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 </Text>
                 <TouchableOpacity
                   style={[styles.scanActionBtn, { marginTop: 16 }]}
-                  onPress={() => setTerminalUnlocked(true)}
+                  onPress={() => {
+                    haptics.impact('medium');
+                    setTerminalUnlocked(true);
+                  }}
                 >
                   <Text style={styles.scanActionText}>Hold to Reveal My Role</Text>
                 </TouchableOpacity>
@@ -1217,8 +1307,8 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       />
 
       {/* FORENSIC SCAN RESULT MODAL */}
-      <Modal visible={Boolean(forensicResult)} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
+      <Modal visible={Boolean(forensicResult)} transparent statusBarTranslucent animationType="fade">
+        <View style={[styles.modalBackdrop, modalSafePadding]}>
           {forensicResult ? (
             <View style={styles.modalCard}>
               <Text style={[styles.kicker, { color: '#F59E0B' }]}>FORENSIC SCAN RESULT</Text>
@@ -1255,8 +1345,8 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       </Modal>
 
       {/* DEAD BODY FOUND MODAL */}
-      <Modal visible={Boolean(deadBodyFound) && state.phase === 'PLAYING'} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
+      <Modal visible={Boolean(deadBodyFound) && state.phase === 'PLAYING'} transparent statusBarTranslucent animationType="fade">
+        <View style={[styles.modalBackdrop, modalSafePadding]}>
           {deadBodyFound ? (
             <View style={[styles.modalCard, { borderColor: '#EF4444' }]}>
               <Text style={[styles.kicker, { color: '#EF4444', textAlign: 'center' }]}>
@@ -1295,8 +1385,8 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       </Modal>
 
       {/* YOU HAVE BEEN KILLED MODAL */}
-      <Modal visible={showKilledModal} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
+      <Modal visible={showKilledModal} transparent statusBarTranslucent animationType="fade">
+        <View style={[styles.modalBackdrop, modalSafePadding]}>
           <View style={[styles.modalCard, { borderColor: '#EF4444' }]}>
             <View style={{ alignItems: 'center' }}>
               <AnimatedCrewmate color={state.self.color} alive={false} size={96} />
@@ -1324,7 +1414,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#0B0F17',
-    paddingTop: 48,
   },
   header: {
     flexDirection: 'row',
@@ -1383,9 +1472,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   scrollContent: {
-    padding: 16,
+    paddingTop: 16,
     gap: 12,
-    paddingBottom: 110,
   },
   panel: {
     backgroundColor: '#131A26',
@@ -1665,9 +1753,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(11, 15, 23, 0.96)',
     borderTopWidth: 1,
     borderTopColor: '#1E293B',
-    paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 26,
     flexDirection: 'row',
     gap: 10,
   },

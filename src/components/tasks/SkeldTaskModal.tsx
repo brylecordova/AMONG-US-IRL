@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion } from 'motion/react';
 import { X } from 'lucide-react';
 import { SkeldTaskDef } from '../../shared/skeldData';
+import { haptics } from '../../utils/haptics';
 import {
   ClearAsteroidsTask,
   DataTransferTask,
@@ -42,6 +43,10 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
   onComplete,
   onClose,
 }) => {
+  useEffect(() => {
+    haptics.impact('light');
+  }, [task.id]);
+
   const renderTaskWidget = () => {
     switch (task.id) {
       case 'fix-wiring':
@@ -84,14 +89,14 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:p-4"
     >
       <motion.div
         initial={{ opacity: 0, scale: 0.94, y: 18 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 12 }}
         transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-        className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl"
+        className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-1.5rem)] overflow-y-auto bg-[#151C28] border border-white/15 rounded-2xl shadow-2xl"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0F1520]">
           <div>
@@ -113,7 +118,10 @@ export const SkeldTaskModal: React.FC<SkeldTaskModalProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              haptics.impact('light');
+              onClose();
+            }}
             className="min-w-[44px] min-h-[44px] rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300"
             aria-label="Close task"
           >

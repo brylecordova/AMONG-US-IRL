@@ -18,6 +18,7 @@
 
     <!-- Top Controls Bar -->
     <LinearLayout
+        android:id="@+id/scannerTopBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
@@ -71,6 +72,7 @@
 
     <!-- Bottom Live Validation / Instruction Banner -->
     <LinearLayout
+        android:id="@+id/scannerBottomBanner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"

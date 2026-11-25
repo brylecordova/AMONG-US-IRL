@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ParsedQrAction, parseQrOrManualInput } from '../skeldShared';
 
@@ -125,9 +126,11 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
   });
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
-      <View style={styles.container}>
-        <View style={styles.header}>
+    <Modal visible={visible} animationType="slide" transparent={false} statusBarTranslucent onRequestClose={onClose}>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeRoot} edges={['top', 'bottom', 'left', 'right']}>
+          <View style={styles.container}>
+            <View style={styles.header}>
           <View style={styles.headerTextWrap}>
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.subtitle}>{subtitle}</Text>
@@ -211,18 +214,24 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
             </View>
           </View>
         ) : null}
-      </View>
+          </View>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  safeRoot: {
+    flex: 1,
+    backgroundColor: '#0B0F17',
+  },
   container: {
     flex: 1,
     backgroundColor: '#0B0F17',
-    paddingTop: 52,
+    paddingTop: 12,
     paddingHorizontal: 18,
-    paddingBottom: 28,
+    paddingBottom: 14,
   },
   header: {
     flexDirection: 'row',

@@ -13,7 +13,6 @@ import {
   PublicAlignment,
   PublicPlayer,
   SabotageKind,
-  SecretRole,
   SKELD_TASKS,
   SkeldTaskId,
   TaskProgress,

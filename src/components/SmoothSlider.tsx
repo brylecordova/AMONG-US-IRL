@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-export type SliderAccent = 'emerald' | 'red' | 'cyan' | 'orange' | 'amber';
+type SliderAccent = 'emerald' | 'red' | 'cyan' | 'orange' | 'amber';
 
 interface SmoothSliderProps {
   label: string;

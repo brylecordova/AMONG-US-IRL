@@ -3,11 +3,13 @@ import {
   Animated,
   Easing,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { getColorDef, PlayerColorId, SecretRole } from '../skeldShared';
 import { AnimatedCrewmate } from './AnimatedCrewmate';
 
@@ -126,70 +128,78 @@ export const RoleSplashOverlay: React.FC<RoleSplashOverlayProps> = ({
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent>
-      <View style={styles.backdrop}>
-        {stage === 'SHH' ? (
-          <Animated.View
-            style={[
-              styles.centerBox,
-              { opacity: opacityAnim, transform: [{ scale: scaleAnim }] },
-            ]}
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.backdrop} edges={['top', 'bottom', 'left', 'right']}>
+          <ScrollView
+            style={{ width: '100%' }}
+            contentContainerStyle={styles.scrollCenter}
+            showsVerticalScrollIndicator={false}
           >
-            <AnimatedCrewmate color={selfColor} size={104} animate />
-            <Text style={styles.shhTitle}>SHHHHH!</Text>
-            <Text style={styles.shhSub}>Shield your screen from nearby crew...</Text>
-          </Animated.View>
-        ) : (
-          <Animated.View
-            style={[
-              styles.centerBox,
-              { opacity: opacityAnim, transform: [{ scale: scaleAnim }] },
-            ]}
-          >
-            <Animated.View
-              style={[
-                styles.glowHalo,
-                { backgroundColor: accent, opacity: glowAnim },
-              ]}
-            />
-            <Text style={styles.kicker}>ROLE BRIEFING</Text>
-            <Text style={[styles.roleTitle, { color: accent }]}>{title}</Text>
-            <Text style={styles.roleSubtitle}>{subtitle}</Text>
+            {stage === 'SHH' ? (
+              <Animated.View
+                style={[
+                  styles.centerBox,
+                  { opacity: opacityAnim, transform: [{ scale: scaleAnim }] },
+                ]}
+              >
+                <AnimatedCrewmate color={selfColor} size={104} animate />
+                <Text style={styles.shhTitle}>SHHHHH!</Text>
+                <Text style={styles.shhSub}>Shield your screen from nearby crew...</Text>
+              </Animated.View>
+            ) : (
+              <Animated.View
+                style={[
+                  styles.centerBox,
+                  { opacity: opacityAnim, transform: [{ scale: scaleAnim }] },
+                ]}
+              >
+                <Animated.View
+                  style={[
+                    styles.glowHalo,
+                    { backgroundColor: accent, opacity: glowAnim },
+                  ]}
+                />
+                <Text style={styles.kicker}>ROLE BRIEFING</Text>
+                <Text style={[styles.roleTitle, { color: accent }]}>{title}</Text>
+                <Text style={styles.roleSubtitle}>{subtitle}</Text>
 
-            <View style={styles.lineupRow}>
-              <View style={styles.avatarCard}>
-                <AnimatedCrewmate color={selfColor} size={86} animate />
-                <Text style={styles.avatarName}>{selfName}</Text>
-                <Text style={[styles.avatarRole, { color: accent }]}>
-                  {getColorDef(selfColor).label}
-                </Text>
-              </View>
-
-              {isImpostorTeam &&
-                teammates.map((mate) => (
-                  <View key={mate.playerId} style={styles.avatarCard}>
-                    <AnimatedCrewmate color={mate.color} size={76} animate />
-                    <Text style={styles.avatarName}>{mate.name}</Text>
-                    <Text style={[styles.avatarRole, { color: '#FF3B30' }]}>
-                      {mate.role === 'SHAPESHIFTER' ? 'Shapeshifter' : 'Partner'}
+                <View style={styles.lineupRow}>
+                  <View style={styles.avatarCard}>
+                    <AnimatedCrewmate color={selfColor} size={86} animate />
+                    <Text style={styles.avatarName}>{selfName}</Text>
+                    <Text style={[styles.avatarRole, { color: accent }]}>
+                      {getColorDef(selfColor).label}
                     </Text>
                   </View>
-                ))}
-            </View>
 
-            <Text style={styles.stealthNote}>
-              Stealth HUD active: once dismissed, your main screen mirrors a standard Crewmate. Open Terminal to view your role or trigger sabotages.
-            </Text>
+                  {isImpostorTeam &&
+                    teammates.map((mate) => (
+                      <View key={mate.playerId} style={styles.avatarCard}>
+                        <AnimatedCrewmate color={mate.color} size={76} animate />
+                        <Text style={styles.avatarName}>{mate.name}</Text>
+                        <Text style={[styles.avatarRole, { color: '#FF3B30' }]}>
+                          {mate.role === 'SHAPESHIFTER' ? 'Shapeshifter' : 'Partner'}
+                        </Text>
+                      </View>
+                    ))}
+                </View>
 
-            <TouchableOpacity
-              style={[styles.enterBtn, { backgroundColor: accent }]}
-              activeOpacity={0.85}
-              onPress={onDismiss}
-            >
-              <Text style={styles.enterBtnText}>ENTER SHIP (HIDE ROLE)</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
-      </View>
+                <Text style={styles.stealthNote}>
+                  Stealth HUD active: once dismissed, your main screen mirrors a standard Crewmate. Open Terminal to view your role or trigger sabotages.
+                </Text>
+
+                <TouchableOpacity
+                  style={[styles.enterBtn, { backgroundColor: accent }]}
+                  activeOpacity={0.85}
+                  onPress={onDismiss}
+                >
+                  <Text style={styles.enterBtnText}>ENTER SHIP (HIDE ROLE)</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 };
@@ -198,9 +208,13 @@ const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: '#050810',
+  },
+  scrollCenter: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
+    paddingVertical: 20,
   },
   centerBox: {
     width: '100%',

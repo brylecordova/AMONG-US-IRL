@@ -10,6 +10,7 @@ import {
 import { CrewmateAvatar } from './components/CrewmateAvatar';
 import { HostDashboard } from './components/HostDashboard';
 import { PlayerHud } from './components/PlayerHud';
+import { haptics } from './utils/haptics';
 import { soundEngine } from './utils/sound';
 
 type AppScreen = 'TITLE' | 'JOIN_FORM' | 'HOST' | 'PLAYER';
@@ -174,6 +175,7 @@ export default function App() {
               setMissionStartedTrigger((n) => n + 1);
             } else if (msg.type === 'player:removed') {
               closedManually = true;
+              haptics.notify('warning');
               setPlayerToken(null);
               setPlayerState(null);
               setScreen('TITLE');
@@ -216,6 +218,7 @@ export default function App() {
 
   const handleCreateHostSession = async () => {
     soundEngine.playClick();
+    haptics.impact('medium');
     setLoading(true);
     setJoinError(null);
     try {
@@ -226,6 +229,7 @@ export default function App() {
       setHostState(data.state);
       setScreen('HOST');
     } catch (err) {
+      haptics.notify('error');
       setJoinError(err instanceof Error ? err.message : 'Failed to boot host command.');
     } finally {
       setLoading(false);
@@ -235,6 +239,7 @@ export default function App() {
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     soundEngine.playClick();
+    haptics.impact('medium');
     setLoading(true);
     setJoinError(null);
     try {
@@ -249,10 +254,12 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to join session');
+      haptics.notify('success');
       setPlayerToken(data.playerToken);
       setPlayerState(data.state);
       setScreen('PLAYER');
     } catch (err) {
+      haptics.notify('error');
       setJoinError(err instanceof Error ? err.message : 'Unable to join session.');
     } finally {
       setLoading(false);
@@ -262,6 +269,7 @@ export default function App() {
   const handleRejoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     soundEngine.playClick();
+    haptics.impact('medium');
     setLoading(true);
     setJoinError(null);
     try {
@@ -275,10 +283,12 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to rejoin session');
+      haptics.notify('success');
       setPlayerToken(data.playerToken);
       setPlayerState(data.state);
       setScreen('PLAYER');
     } catch (err) {
+      haptics.notify('error');
       setJoinError(err instanceof Error ? err.message : 'Unable to rejoin session.');
     } finally {
       setLoading(false);
@@ -324,7 +334,7 @@ export default function App() {
   // JOIN MISSION FORM (SMARTPHONE)
   if (screen === 'JOIN_FORM') {
     return (
-      <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-[#0B0F17] text-slate-100 flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
         <motion.div
           initial={{ opacity: 0, y: 20, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -334,7 +344,10 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setScreen('TITLE')}
+              onClick={() => {
+                haptics.impact('light');
+                setScreen('TITLE');
+              }}
               className="min-w-[44px] min-h-[44px] rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300"
               aria-label="Back to title"
             >
@@ -357,6 +370,7 @@ export default function App() {
               type="button"
               onClick={() => {
                 soundEngine.playClick();
+                haptics.selection();
                 setJoinMode('NEW');
                 setJoinError(null);
               }}
@@ -372,6 +386,7 @@ export default function App() {
               type="button"
               onClick={() => {
                 soundEngine.playClick();
+                haptics.selection();
                 setJoinMode('REJOIN');
                 setJoinError(null);
               }}
@@ -434,6 +449,7 @@ export default function App() {
                         disabled={isTaken}
                         onClick={() => {
                           soundEngine.playClick();
+                          haptics.selection();
                           setSelectedColor(color.id);
                         }}
                         className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
@@ -528,7 +544,7 @@ export default function App() {
 
   // FULL-VIEWPORT TITLE SCREEN (GAME SHELL)
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-[#0B0F17] flex items-center">
+    <div className="relative min-h-dvh w-full overflow-hidden bg-[#0B0F17] flex items-center pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Generated Key-Art Backdrop with contrast scrim */}
       <motion.img
         initial={{ scale: 1.08, opacity: 0 }}
@@ -541,7 +557,7 @@ export default function App() {
       />
       <div className="absolute inset-0 bg-gradient-to-r from-[#0B0F17] via-[#0B0F17]/85 to-[#0B0F17]/25" />
 
-      <div className="relative z-10 max-w-6xl w-full mx-auto px-6 py-12">
+      <div className="relative z-10 max-w-6xl w-full mx-auto px-6 py-10 sm:py-12">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
@@ -615,6 +631,7 @@ export default function App() {
               whileTap={{ scale: 0.97 }}
               onClick={() => {
                 soundEngine.playClick();
+                haptics.impact('medium');
                 setScreen('JOIN_FORM');
               }}
               className="flex-1 min-h-[52px] px-5 py-3 rounded-xl bg-[#151C28] hover:bg-[#1E293B] border border-white/15 text-white font-bold text-sm flex items-center justify-center gap-2.5"

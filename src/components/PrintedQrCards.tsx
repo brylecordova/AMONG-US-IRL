@@ -42,7 +42,7 @@ interface TaskTheme {
   renderQuirk: () => React.ReactNode;
 }
 
-export const TASK_THEMES: Record<SkeldTaskId, TaskTheme> = {
+const TASK_THEMES: Record<SkeldTaskId, TaskTheme> = {
   'fix-wiring': {
     Icon: Cable,
     accentHex: '#EAB308',

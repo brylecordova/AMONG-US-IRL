@@ -2,11 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SkeldTaskDef } from '../skeldShared';
 
 interface TaskMiniGamesModalProps {
@@ -80,35 +82,44 @@ export const TaskMiniGamesModal: React.FC<TaskMiniGamesModalProps> = ({
 
   return (
     <Modal visible={Boolean(task)} animationType="fade" transparent statusBarTranslucent>
-      <View style={styles.backdrop}>
-        <Animated.View
-          style={[
-            styles.card,
-            { opacity: opacityAnim, transform: [{ translateY: slideAnim }] },
-          ]}
-        >
-          <View style={styles.header}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.roomBadge}>
-                {task.room.toUpperCase()} • {task.tier}
-              </Text>
-              <Text style={styles.taskTitle}>{task.name}</Text>
-            </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-              <Text style={styles.closeBtnText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-          {isBlackoutRepair ? (
-            <View style={styles.blackoutNotice}>
-              <Text style={styles.blackoutNoticeText}>
-                EMERGENCY BLACKOUT REPAIR • Complete wiring to restore ship power!
-              </Text>
-            </View>
-          ) : null}
-          <Text style={styles.instruction}>{task.instruction}</Text>
-          <View style={styles.body}>{renderTask()}</View>
-        </Animated.View>
-      </View>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.backdrop} edges={['top', 'bottom', 'left', 'right']}>
+          <ScrollView
+            style={{ width: '100%' }}
+            contentContainerStyle={styles.scrollCenter}
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+          >
+            <Animated.View
+              style={[
+                styles.card,
+                { opacity: opacityAnim, transform: [{ translateY: slideAnim }] },
+              ]}
+            >
+              <View style={styles.header}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.roomBadge}>
+                    {task.room.toUpperCase()} • {task.tier}
+                  </Text>
+                  <Text style={styles.taskTitle}>{task.name}</Text>
+                </View>
+                <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+                  <Text style={styles.closeBtnText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+              {isBlackoutRepair ? (
+                <View style={styles.blackoutNotice}>
+                  <Text style={styles.blackoutNoticeText}>
+                    EMERGENCY BLACKOUT REPAIR • Complete wiring to restore ship power!
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={styles.instruction}>{task.instruction}</Text>
+              <View style={styles.body}>{renderTask()}</View>
+            </Animated.View>
+          </ScrollView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 };
@@ -1208,10 +1219,14 @@ const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(5, 8, 16, 0.88)',
+  },
+  scrollCenter: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 18,
+    padding: 16,
   },
   card: {
+    width: '100%',
     backgroundColor: '#131A26',
     borderRadius: 22,
     borderWidth: 1,

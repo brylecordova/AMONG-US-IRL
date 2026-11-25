@@ -8,9 +8,12 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -26,6 +29,10 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -98,12 +105,14 @@ class QrScannerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureSystemBars()
         setContentView(R.layout.activity_qr_scanner)
 
         previewView = findViewById(R.id.cameraPreview)
         txtScannerTitle = findViewById(R.id.txtScannerTitle)
         txtScannerStatus = findViewById(R.id.txtScannerStatus)
         btnToggleTorch = findViewById(R.id.btnToggleTorch)
+        applySafeScannerInsets()
 
         mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_GAME_SCAN
         txtScannerTitle.text = intent.getStringExtra(EXTRA_TITLE) ?: "Scan QR Code"
@@ -148,6 +157,54 @@ class QrScannerActivity : AppCompatActivity() {
         } else {
             requestCameraPermission.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    private fun configureSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+    }
+
+    private fun applySafeScannerInsets() {
+        val topBar = findViewById<View>(R.id.scannerTopBar)
+        val bottomBanner = findViewById<View>(R.id.scannerBottomBanner)
+
+        val topLeft = topBar.paddingLeft
+        val topTop = topBar.paddingTop
+        val topRight = topBar.paddingRight
+        val topBottom = topBar.paddingBottom
+
+        val bottomLeft = bottomBanner.paddingLeft
+        val bottomTop = bottomBanner.paddingTop
+        val bottomRight = bottomBanner.paddingRight
+        val bottomBottom = bottomBanner.paddingBottom
+
+        val rootView = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { _, insets ->
+            val safeBars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            topBar.setPadding(
+                topLeft + safeBars.left,
+                topTop + safeBars.top,
+                topRight + safeBars.right,
+                topBottom
+            )
+            bottomBanner.setPadding(
+                bottomLeft + safeBars.left,
+                bottomTop,
+                bottomRight + safeBars.right,
+                bottomBottom + safeBars.bottom
+            )
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(rootView)
     }
 
     override fun onDestroy() {
