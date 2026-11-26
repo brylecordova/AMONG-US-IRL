@@ -202,6 +202,26 @@ interface WsClientMeta {
 const clientsBySession = new Map<string, Set<WsClientMeta>>();
 // sessionCode -> Map<watcherPlayerId, targetPlayerId>
 const securityWatchersBySession = new Map<string, Map<string, string>>();
+const disconnectNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const recentExplicitLeaves = new Map<string, number>();
+
+function presenceKey(sessionCode: string, playerId: string): string {
+  return `${sessionCode}:${playerId}`;
+}
+
+function clearDisconnectTimer(sessionCode: string, playerId: string) {
+  const key = presenceKey(sessionCode, playerId);
+  const timer = disconnectNotifyTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    disconnectNotifyTimers.delete(key);
+  }
+}
+
+function markExplicitPlayerLeave(sessionCode: string, playerId: string) {
+  clearDisconnectTimer(sessionCode, playerId);
+  recentExplicitLeaves.set(presenceKey(sessionCode, playerId), Date.now());
+}
 
 function sendToPlayerSockets(sessionCode: string, playerId: string, data: unknown) {
   const group = clientsBySession.get(sessionCode);
@@ -566,6 +586,7 @@ async function main() {
 
       const { session, departed } = await leaveGameSession(code, playerToken);
       if (departed && session) {
+        markExplicitPlayerLeave(code, departed.playerId);
         clearWatcher(code, departed.playerId);
         const watchersOfDeparted = getTargetWatcherIds(code, departed.playerId);
         for (const watcherId of watchersOfDeparted) {
@@ -646,8 +667,27 @@ async function main() {
       if (!code || !hostToken || typeof playerId !== 'string') {
         return res.status(400).json({ error: 'Invalid kick request.' });
       }
+      const existing = await getSession(code);
+      const kickedPlayer = existing?.players.find((p) => p.playerId === playerId);
+      if (kickedPlayer) {
+        markExplicitPlayerLeave(code, kickedPlayer.playerId);
+        clearWatcher(code, kickedPlayer.playerId);
+      }
       const session = await kickPlayerFromLobby(code, hostToken, playerId);
-      await broadcastSessionState(code);
+      await broadcastSessionState(
+        code,
+        kickedPlayer
+          ? {
+              type: 'player:left',
+              payload: {
+                playerId: kickedPlayer.playerId,
+                name: kickedPlayer.name,
+                color: kickedPlayer.color,
+                phase: session.phase,
+              },
+            }
+          : undefined,
+      );
       res.json({ state: projectForHost(session, getLanUrls(PORT)) });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to remove player.' });
@@ -1217,6 +1257,8 @@ async function main() {
             }
             const wasDisconnected = !found.connected;
             playerId = found.playerId;
+            clearDisconnectTimer(code, found.playerId);
+            recentExplicitLeaves.delete(presenceKey(code, found.playerId));
             found.connected = true;
             if (wasDisconnected) {
               rejoinedEvent = {
@@ -1479,10 +1521,49 @@ async function main() {
             });
           }
           if (session) {
-            const p = session.players.find((pl) => pl.playerId === clientMeta!.playerId);
+            const leftPlayerId = clientMeta.playerId;
+            const leftSessionCode = clientMeta.sessionCode;
+            const p = session.players.find((pl) => pl.playerId === leftPlayerId);
             if (p) {
               p.connected = false;
-              await broadcastSessionState(clientMeta.sessionCode);
+              await broadcastSessionState(leftSessionCode);
+
+              const explicitAt = recentExplicitLeaves.get(presenceKey(leftSessionCode, leftPlayerId));
+              const recentlyLeftExplicitly = Boolean(explicitAt && Date.now() - explicitAt < 8000);
+              if (!recentlyLeftExplicitly) {
+                clearDisconnectTimer(leftSessionCode, leftPlayerId);
+                const key = presenceKey(leftSessionCode, leftPlayerId);
+                const timer = setTimeout(async () => {
+                  disconnectNotifyTimers.delete(key);
+                  const stillReconnected = Array.from(
+                    clientsBySession.get(leftSessionCode) || [],
+                  ).some(
+                    (c) =>
+                      c.role === 'PLAYER' &&
+                      c.playerId === leftPlayerId &&
+                      c.ws.readyState === WebSocket.OPEN,
+                  );
+                  if (stillReconnected) return;
+                  const explicitNow = recentExplicitLeaves.get(key);
+                  if (explicitNow && Date.now() - explicitNow < 10_000) return;
+
+                  const latest = await getSession(leftSessionCode);
+                  const latestPlayer = latest?.players.find((pl) => pl.playerId === leftPlayerId);
+                  if (!latest || !latestPlayer || latestPlayer.connected) return;
+
+                  await broadcastSessionState(leftSessionCode, {
+                    type: 'player:left',
+                    payload: {
+                      playerId: latestPlayer.playerId,
+                      name: latestPlayer.name,
+                      color: latestPlayer.color,
+                      phase: latest.phase,
+                      disconnected: true,
+                    },
+                  });
+                }, 2500);
+                disconnectNotifyTimers.set(key, timer);
+              }
             }
           }
         }

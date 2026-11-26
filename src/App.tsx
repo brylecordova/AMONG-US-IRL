@@ -195,6 +195,7 @@ export default function App() {
     screenRef.current = screen;
     if (screen !== 'PLAYER') {
       leavingSessionRef.current = false;
+      setAndroidLeaveTrigger(0);
     }
   }, [screen]);
 
@@ -234,6 +235,8 @@ export default function App() {
             if (res.ok && data.state && data.playerToken) {
               persistPlayerSession(data.state.sessionCode, data.state.self?.rejoinCode || urlRejoin);
               haptics.notify('success');
+              setAndroidLeaveTrigger(0);
+              setCrewPresenceEvent(null);
               setPlayerToken(data.playerToken);
               setPlayerState(data.state);
               setScreen('PLAYER');
@@ -283,6 +286,8 @@ export default function App() {
                     rejoinData.state.self?.rejoinCode || saved.rejoinCode,
                   );
                   haptics.notify('success');
+                  setAndroidLeaveTrigger(0);
+                  setCrewPresenceEvent(null);
                   setPlayerToken(rejoinData.playerToken);
                   setPlayerState(rejoinData.state);
                   setScreen('PLAYER');
@@ -913,6 +918,8 @@ export default function App() {
       const res = await fetch('/api/sessions', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not create session');
+      setAndroidLeaveTrigger(0);
+      setCrewPresenceEvent(null);
       setHostToken(data.hostToken);
       setHostState(data.state);
       setScreen('HOST');
@@ -946,6 +953,8 @@ export default function App() {
       if (data.state?.sessionCode && data.state?.self?.rejoinCode) {
         persistPlayerSession(data.state.sessionCode, data.state.self.rejoinCode);
       }
+      setAndroidLeaveTrigger(0);
+      setCrewPresenceEvent(null);
       setPlayerToken(data.playerToken);
       setPlayerState(data.state);
       setScreen('PLAYER');
@@ -979,6 +988,8 @@ export default function App() {
         data.state?.sessionCode || code,
         data.state?.self?.rejoinCode || rejoin,
       );
+      setAndroidLeaveTrigger(0);
+      setCrewPresenceEvent(null);
       setPlayerToken(data.playerToken);
       setPlayerState(data.state);
       setScreen('PLAYER');
@@ -1087,6 +1098,7 @@ export default function App() {
         sheriffActionEvent={sheriffActionEvent}
         crewPresenceEvent={crewPresenceEvent}
         androidLeaveTrigger={androidLeaveTrigger}
+        onAndroidLeaveConsumed={() => setAndroidLeaveTrigger(0)}
         securityWatcherCount={securityWatcherCount}
         securityLatestFrame={securityLatestFrame}
         securityTargetStatus={securityTargetStatus}
@@ -1106,6 +1118,7 @@ export default function App() {
         }}
         onLeaveSession={() => {
           clearSavedPlayerSession();
+          setAndroidLeaveTrigger(0);
           setCrewPresenceEvent(null);
           setSecurityWatcherCount(0);
           setSecurityLatestFrame(null);

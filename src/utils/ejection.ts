@@ -1,4 +1,9 @@
-import type { GamePhase, MeetingStage, SecretRole } from '../shared/skeldData';
+import type {
+  GamePhase,
+  MeetingStage,
+  PlayerColorId,
+  SecretRole,
+} from '../shared/skeldData';
 
 export interface VerdictEjectionCheckInput {
   phase: GamePhase;
@@ -42,3 +47,30 @@ export function formatEjectionSubtitle(opts: {
   }
   return `Airlock Sealed · Vessel ${opts.sessionCode}`;
 }
+
+export function shouldConsumeAndroidLeave(triggerCount?: number | null): boolean {
+  return typeof triggerCount === 'number' && triggerCount > 0;
+}
+
+export interface PresenceRosterPlayer {
+  playerId: string;
+  name: string;
+  color: PlayerColorId;
+}
+
+export function findDepartedPlayers<T extends PresenceRosterPlayer>(
+  prevPlayers: readonly T[] | null | undefined,
+  nextPlayers: readonly T[],
+  selfPlayerId: string,
+): PresenceRosterPlayer[] {
+  if (!prevPlayers || prevPlayers.length === 0) return [];
+  const nextIds = new Set(nextPlayers.map((p) => p.playerId));
+  return prevPlayers
+    .filter((p) => p.playerId !== selfPlayerId && !nextIds.has(p.playerId))
+    .map((p) => ({
+      playerId: p.playerId,
+      name: p.name,
+      color: p.color,
+    }));
+}
+

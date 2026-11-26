@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatEjectionSubtitle, shouldShowVerdictEjection } from './ejection.ts';
+import {
+  findDepartedPlayers,
+  formatEjectionSubtitle,
+  shouldConsumeAndroidLeave,
+  shouldShowVerdictEjection,
+} from './ejection.ts';
 
 test('shouldShowVerdictEjection triggers only when meeting is in VERDICT with an ejectedPlayer and not dismissed', () => {
   assert.equal(
@@ -110,3 +115,33 @@ test('formatEjectionSubtitle reflects confirmEjects and role metadata', () => {
     'Airlock Sealed · Vessel SKLD01',
   );
 });
+
+test('shouldConsumeAndroidLeave only triggers when triggerCount is positive', () => {
+  assert.equal(shouldConsumeAndroidLeave(undefined), false);
+  assert.equal(shouldConsumeAndroidLeave(null), false);
+  assert.equal(shouldConsumeAndroidLeave(0), false);
+  assert.equal(shouldConsumeAndroidLeave(-1), false);
+  assert.equal(shouldConsumeAndroidLeave(1), true);
+  assert.equal(shouldConsumeAndroidLeave(3), true);
+});
+
+test('findDepartedPlayers detects removed teammates while excluding self', () => {
+  const prev = [
+    { playerId: 'p1', name: 'HostKid', color: 'red' as const },
+    { playerId: 'p2', name: 'CrewmateTwo', color: 'cyan' as const },
+    { playerId: 'p3', name: 'CrewmateThree', color: 'lime' as const },
+  ];
+  const next = [
+    { playerId: 'p1', name: 'HostKid', color: 'red' as const },
+    { playerId: 'p3', name: 'CrewmateThree', color: 'lime' as const },
+  ];
+
+  assert.deepEqual(findDepartedPlayers(prev, next, 'p1'), [
+    { playerId: 'p2', name: 'CrewmateTwo', color: 'cyan' },
+  ]);
+
+  assert.deepEqual(findDepartedPlayers(prev, next, 'p2'), []);
+  assert.deepEqual(findDepartedPlayers(null, next, 'p1'), []);
+  assert.deepEqual(findDepartedPlayers([], next, 'p1'), []);
+});
+

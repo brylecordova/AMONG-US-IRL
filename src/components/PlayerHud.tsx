@@ -44,7 +44,12 @@ import { RoleSplashModal } from './RoleSplashModal';
 import { SecurityMonitorModal } from './SecurityMonitorModal';
 import { SpaceEjectionOverlay } from './SpaceEjectionOverlay';
 import { SkeldTaskModal } from './tasks/SkeldTaskModal';
-import { formatEjectionSubtitle, shouldShowVerdictEjection } from '../utils/ejection';
+import {
+  findDepartedPlayers,
+  formatEjectionSubtitle,
+  shouldConsumeAndroidLeave,
+  shouldShowVerdictEjection,
+} from '../utils/ejection';
 import { haptics } from '../utils/haptics';
 import { soundEngine } from '../utils/sound';
 
@@ -76,6 +81,7 @@ interface PlayerHudProps {
     phase?: string;
   } | null;
   androidLeaveTrigger?: number;
+  onAndroidLeaveConsumed?: () => void;
   securityWatcherCount: number;
   securityLatestFrame: { targetPlayerId: string; imageBase64: string; ts: number } | null;
   securityTargetStatus: {
@@ -114,6 +120,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   sheriffActionEvent,
   crewPresenceEvent,
   androidLeaveTrigger,
+  onAndroidLeaveConsumed,
   securityWatcherCount,
   securityLatestFrame,
   securityTargetStatus,
@@ -176,6 +183,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const lastVisualAlertIdRef = useRef<string | null>(null);
   const lastVerdictEjectSoundMeetingIdRef = useRef<string | null>(null);
   const lastPresenceSeqRef = useRef<number>(0);
+  const recentLeftAlertAtRef = useRef<Map<string, number>>(new Map());
+  const prevPlayersRosterRef = useRef(state.players);
   const presenceTimerRef = useRef<number | null>(null);
   const ejectTriggeredRef = useRef(false);
   const ejectTimerRef = useRef<number | null>(null);
@@ -470,13 +479,22 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     }
   }, [securityErrorEvent]);
 
-  // Show crew departure / rejoin banner when another player leaves or reconnects
-  useEffect(() => {
-    if (!crewPresenceEvent || crewPresenceEvent.seq === lastPresenceSeqRef.current) return;
-    lastPresenceSeqRef.current = crewPresenceEvent.seq;
-    if (crewPresenceEvent.playerId === state.self.playerId) return;
+  const triggerPresenceAlert = (alert: {
+    seq: number;
+    kind: 'LEFT' | 'REJOINED';
+    playerId: string;
+    playerName: string;
+    playerColor: PlayerColorId;
+    phase?: string;
+  }) => {
+    if (alert.kind === 'LEFT') {
+      const now = Date.now();
+      const prevAt = recentLeftAlertAtRef.current.get(alert.playerId);
+      if (prevAt && now - prevAt < 6000) return;
+      recentLeftAlertAtRef.current.set(alert.playerId, now);
+    }
 
-    setActivePresenceAlert(crewPresenceEvent);
+    setActivePresenceAlert(alert);
     soundEngine.playClick();
     haptics.impact('light');
 
@@ -486,8 +504,34 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     presenceTimerRef.current = window.setTimeout(() => {
       setActivePresenceAlert(null);
       presenceTimerRef.current = null;
-    }, 4500);
+    }, 5500);
+  };
+
+  // Show crew departure / rejoin banner when another player leaves or reconnects
+  useEffect(() => {
+    if (!crewPresenceEvent || crewPresenceEvent.seq === lastPresenceSeqRef.current) return;
+    lastPresenceSeqRef.current = crewPresenceEvent.seq;
+    if (crewPresenceEvent.playerId === state.self.playerId) return;
+
+    triggerPresenceAlert(crewPresenceEvent);
   }, [crewPresenceEvent, state.self.playerId]);
+
+  // Fallback: detect departed teammates directly from player roster updates in case WS frame was missed
+  useEffect(() => {
+    const prevRoster = prevPlayersRosterRef.current;
+    prevPlayersRosterRef.current = state.players;
+    const departedList = findDepartedPlayers(prevRoster, state.players, state.self.playerId);
+    if (departedList.length === 0) return;
+    const latest = departedList[departedList.length - 1];
+    triggerPresenceAlert({
+      seq: Date.now() + Math.random(),
+      kind: 'LEFT',
+      playerId: latest.playerId,
+      playerName: latest.name,
+      playerColor: latest.color,
+      phase: state.phase,
+    });
+  }, [state.players, state.self.playerId, state.phase]);
 
   const finishEjectLeave = () => {
     if (ejectTimerRef.current !== null) {
@@ -529,10 +573,11 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   };
 
   useEffect(() => {
-    if (androidLeaveTrigger && androidLeaveTrigger > 0) {
+    if (shouldConsumeAndroidLeave(androidLeaveTrigger)) {
+      onAndroidLeaveConsumed?.();
       beginEjectAndLeave();
     }
-  }, [androidLeaveTrigger]);
+  }, [androidLeaveTrigger, onAndroidLeaveConsumed]);
 
   useEffect(() => {
     return () => {
@@ -1224,11 +1269,13 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         {activePresenceAlert && (
           <motion.div
             key={activePresenceAlert.seq}
+            role="status"
+            aria-live="polite"
             initial={{ opacity: 0, y: -18, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -16, scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 360, damping: 26 }}
-            className="fixed top-[calc(4.1rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-md pointer-events-auto"
+            className="fixed top-[calc(4.1rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[80] w-[calc(100%-2rem)] max-w-md pointer-events-auto"
           >
             <div
               className={`rounded-2xl border px-3.5 py-2.5 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 ${
@@ -1256,8 +1303,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                     <span className="font-normal text-slate-300">
                       {activePresenceAlert.kind === 'LEFT'
                         ? activePresenceAlert.phase === 'LOBBY' || activePresenceAlert.phase === 'ENDED'
-                          ? 'left the lobby.'
-                          : 'left the mission.'
+                          ? 'has left the lobby.'
+                          : 'has left the mission.'
                         : activePresenceAlert.phase === 'LOBBY'
                           ? 'rejoined the lobby.'
                           : 'rejoined the mission.'}
@@ -1368,10 +1415,17 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                       initial={{ opacity: 0, scale: 0.92 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: idx * 0.03 }}
-                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950/60 border border-white/5"
+                      className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/60 border border-white/5"
                     >
-                      <CrewmateAvatar color={p.color} size={28} />
-                      <span className="text-xs font-medium text-white truncate">{p.name}</span>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <CrewmateAvatar color={p.color} size={28} />
+                        <span className="text-xs font-medium text-white truncate">{p.name}</span>
+                      </div>
+                      {p.connected === false && (
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-amber-300/90 shrink-0">
+                          Offline
+                        </span>
+                      )}
                     </motion.div>
                   ))}
                 </div>
