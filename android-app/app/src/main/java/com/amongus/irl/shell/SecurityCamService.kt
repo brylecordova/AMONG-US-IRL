@@ -298,7 +298,7 @@ class SecurityCamService : LifecycleService() {
             "Mission Active • Security Standby"
         }
         val text = if (captureActive) {
-            "Another player is viewing your rear camera feed (5 FPS)"
+            "Another player is viewing your rear camera feed (15 FPS)"
         } else {
             "Rear camera offline until selected on Security terminal"
         }
@@ -318,9 +318,9 @@ class SecurityCamService : LifecycleService() {
         private const val CHANNEL_STANDBY = "skeld_security_standby"
         private const val CHANNEL_LIVE = "skeld_security_live"
         private const val NOTIFICATION_ID = 4201
-        private const val FRAME_INTERVAL_MS = 190L
+        private const val FRAME_INTERVAL_MS = 66L
         private const val MAX_EDGE_PX = 320
-        private const val JPEG_QUALITY = 52
+        private const val JPEG_QUALITY = 45
 
         const val ACTION_START_STANDBY = "com.amongus.irl.shell.SECURITY_START_STANDBY"
         const val ACTION_SET_CAPTURE = "com.amongus.irl.shell.SECURITY_SET_CAPTURE"

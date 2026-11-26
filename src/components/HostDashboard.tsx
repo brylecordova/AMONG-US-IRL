@@ -1860,7 +1860,7 @@ ${compiledCss}
               </section>
             )}
 
-            {/* Security Camera Terminal QR (5 FPS Live CCTV Monitor) */}
+            {/* Security Camera Terminal QR (15 FPS Live CCTV Monitor) */}
             {showSecuritySection && (
               <section
                 className={`space-y-4 print:space-y-2 ${

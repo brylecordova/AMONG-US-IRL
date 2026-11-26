@@ -703,7 +703,7 @@ export const PrintedSecurityCamQrCard: React.FC<{
               SECURITY CAMS
             </div>
             <div className="text-[10px] font-mono font-bold text-slate-300 mt-0.5">
-              SECURITY ROOM · 5 FPS LIVE FEED
+              SECURITY ROOM · 15 FPS LIVE FEED
             </div>
           </div>
         </div>

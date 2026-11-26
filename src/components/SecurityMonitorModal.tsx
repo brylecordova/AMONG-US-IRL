@@ -71,7 +71,7 @@ export const SecurityMonitorModal: React.FC<SecurityMonitorModalProps> = ({
                 {jammed
                   ? 'COMMS SIGNAL JAMMED'
                   : selectedPlayer
-                    ? `FEED: ${selectedPlayer.name.toUpperCase()} · 5 FPS`
+                    ? `FEED: ${selectedPlayer.name.toUpperCase()} · 15 FPS`
                     : 'SELECT A CREWMATE CAMERA'}
               </p>
             </div>
@@ -120,7 +120,7 @@ export const SecurityMonitorModal: React.FC<SecurityMonitorModalProps> = ({
                   CCTV STANDBY
                 </div>
                 <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-                  Tap any alive crewmate below to link into their rear camera at 5 FPS. They will see a notice that Security is watching.
+                  Tap any alive crewmate below to link into their rear camera at 15 FPS. They will see a notice that Security is watching.
                 </p>
               </div>
             ) : !selectedPlayer.alive || targetLostReason === 'DECEASED' ? (
@@ -166,7 +166,7 @@ export const SecurityMonitorModal: React.FC<SecurityMonitorModalProps> = ({
                   LINKING TO {selectedPlayer.name.toUpperCase()}...
                 </div>
                 <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-                  Awaiting rear camera frames from their Android companion app.
+                  Awaiting live camera frames from player device.
                 </p>
               </div>
             )}
@@ -191,7 +191,7 @@ export const SecurityMonitorModal: React.FC<SecurityMonitorModalProps> = ({
             {hasValidFrame && selectedPlayer && (
               <div className="pointer-events-none absolute top-3 left-3 px-2.5 py-1 rounded-md bg-black/75 border border-red-500/50 flex items-center gap-1.5 text-[10px] font-mono font-bold text-white">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                <span>REC · 5 FPS · {selectedPlayer.name.toUpperCase()}</span>
+                <span>REC · 15 FPS · {selectedPlayer.name.toUpperCase()}</span>
               </div>
             )}
           </div>

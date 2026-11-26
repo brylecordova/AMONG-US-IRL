@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 72" width="100%" role="img" aria-label="Deck 02 - Flight Deck Launch and Field Units">
+  <defs>
+    <linearGradient id="barBg2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#040814"/>
+      <stop offset="50%" stop-color="#140c1c"/>
+      <stop offset="100%" stop-color="#040814"/>
+    </linearGradient>
+    <linearGradient id="crimsonRail" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.15"/>
+      <stop offset="30%" stop-color="#f87171" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ef4444" stop-opacity="0.15"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="72" rx="8" fill="url(#barBg2)" stroke="#33202a" stroke-width="1.2"/>
+  <circle cx="140" cy="52" r="1" fill="#e2e8f0" opacity="0.5"/>
+  <circle cx="520" cy="18" r="1.1" fill="#fecaca" opacity="0.6"/>
+  <circle cx="845" cy="16" r="1.2" fill="#e2e8f0" opacity="0.65"/>
+  <circle cx="1090" cy="52" r="1" fill="#fca5a5" opacity="0.7"/>
+
+  <polygon points="18,16 34,16 42,24 42,48 34,56 18,56" fill="#ef4444" fill-opacity="0.18" stroke="#f87171" stroke-width="1.2"/>
+  <rect x="26" y="28" width="6" height="16" rx="1" fill="#ef4444"/>
+
+  <text x="62" y="31" fill="#fca5a5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="2.2">
+    DECK 02 // FLIGHT DECK IGNITION
+  </text>
+  <text x="62" y="51" fill="#f8fafc" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="19" font-weight="800" letter-spacing="2">
+    HOST LAUNCH, FIELD UNITS &amp; LAN ROUTING
+  </text>
+
+  <line x1="595" y1="36" x2="995" y2="36" stroke="url(#crimsonRail)" stroke-width="1.5"/>
+  <text x="1174" y="40" fill="#fca5a5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="1.8" text-anchor="end">
+    UPLINK // 0.0.0.0:3000
+  </text>
+</svg>

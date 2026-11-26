@@ -2,11 +2,14 @@ package com.amongus.irl.shell
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Dialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -14,6 +17,8 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.View
+import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -28,7 +33,6 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -371,14 +375,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmAndLeaveLobby() {
-        AlertDialog.Builder(this)
-            .setTitle("Leave Lobby?")
-            .setMessage("Are you sure you want to leave the current lobby? This will exit your mission and clear saved auto-rejoin data.")
-            .setNegativeButton("Stay", null)
-            .setPositiveButton("Leave Lobby") { _, _ ->
-                leaveCurrentLobby()
-            }
-            .show()
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_leave_lobby)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            val marginPx = (32 * resources.displayMetrics.density).toInt()
+            val maxWidth = resources.displayMetrics.widthPixels - marginPx
+            setLayout(maxWidth.coerceAtLeast(ViewGroup.LayoutParams.WRAP_CONTENT), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        dialog.findViewById<View>(R.id.btnAirlockStay)?.setOnClickListener {
+            performNativeHaptic("light")
+            dialog.dismiss()
+        }
+        dialog.findViewById<View>(R.id.btnAirlockEject)?.setOnClickListener {
+            performNativeHaptic("medium")
+            dialog.dismiss()
+            leaveCurrentLobby()
+        }
+
+        dialog.show()
     }
 
     private fun leaveCurrentLobby() {

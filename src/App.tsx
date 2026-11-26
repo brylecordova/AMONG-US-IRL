@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { ArrowLeft, Monitor, QrCode, Smartphone } from 'lucide-react';
 import {
   ClientGameState,
+  getColorDef,
   HostGameState,
   ParsedQrAction,
   PLAYER_COLORS,
@@ -172,6 +173,9 @@ export default function App() {
   const sendWsMessage = useCallback((msg: Record<string, unknown>) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      if (msg.type === 'security:frame' && ws.bufferedAmount > 96_000) {
+        return;
+      }
       ws.send(JSON.stringify(msg));
     }
   }, []);
@@ -620,7 +624,7 @@ export default function App() {
   const shouldCaptureSecurityCam =
     isMatchAlivePlayer && !isSignalJamActive && securityWatcherCount > 0;
 
-  // Wire native Android APK 5 FPS CameraX service & frame bridge
+  // Wire native Android APK 15 FPS CameraX service & frame bridge
   useEffect(() => {
     window.__onAndroidSecurityFrame = (base64Jpeg: string) => {
       sendWsMessage({ type: 'security:frame', imageBase64: base64Jpeg });
@@ -638,7 +642,18 @@ export default function App() {
     };
   }, [shouldCaptureSecurityCam, sendWsMessage]);
 
-  // Browser HTTPS / localhost fallback when testing outside the Android APK
+  const simCamMetaRef = useRef<{ color: PlayerColorId; name: string }>({
+    color: 'red',
+    name: 'Player',
+  });
+  useEffect(() => {
+    simCamMetaRef.current = {
+      color: playerState?.self?.color || 'red',
+      name: playerState?.self?.name || 'Player',
+    };
+  }, [playerState?.self?.color, playerState?.self?.name]);
+
+  // Browser webcam capture + automatic 15 FPS simulated test-cam fallback for multi-tab testing
   useEffect(() => {
     const hasNativeBridge = typeof window.AmongUsAndroid?.setSecurityCaptureActive === 'function';
     if (hasNativeBridge) return;
@@ -656,13 +671,77 @@ export default function App() {
       window.isSecureContext ||
       window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1';
-    if (!isSecureBrowser || !navigator.mediaDevices?.getUserMedia) return;
 
     let cancelled = false;
     let stream: MediaStream | null = null;
     let intervalId: number | null = null;
 
+    const startSimCanvasFallback = () => {
+      if (cancelled) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 240;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      let tick = 0;
+      intervalId = window.setInterval(() => {
+        if (cancelled) return;
+        tick += 1;
+
+        const { color, name } = simCamMetaRef.current;
+        const colorDef = getColorDef(color);
+
+        ctx.fillStyle = '#070D18';
+        ctx.fillRect(0, 0, 320, 240);
+
+        // Smooth 15 FPS radar sweep line
+        const sweepY = (tick * 4) % 240;
+        ctx.fillStyle = 'rgba(34, 211, 238, 0.16)';
+        ctx.fillRect(0, sweepY, 320, 14);
+
+        // Suit color avatar circle
+        ctx.fillStyle = colorDef.hex;
+        ctx.beginPath();
+        ctx.arc(160, 102, 38, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Visor
+        ctx.fillStyle = '#9ADBF9';
+        ctx.fillRect(142, 84, 36, 18);
+
+        ctx.fillStyle = '#F8FAFC';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(name.toUpperCase(), 160, 168);
+
+        ctx.fillStyle = '#67E8F9';
+        ctx.font = 'bold 11px monospace';
+        ctx.fillText(`SIM TEST CAM · ${colorDef.label.toUpperCase()}`, 160, 190);
+
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '11px monospace';
+        ctx.fillText(new Date().toLocaleTimeString(), 160, 212);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.48);
+        const commaIdx = dataUrl.indexOf(',');
+        if (commaIdx !== -1) {
+          sendWsMessage({
+            type: 'security:frame',
+            imageBase64: dataUrl.slice(commaIdx + 1),
+          });
+        }
+      }, 66);
+    };
+
     const startFallbackCapture = async () => {
+      if (!isSecureBrowser || !navigator.mediaDevices?.getUserMedia) {
+        startSimCanvasFallback();
+        return;
+      }
       try {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -696,7 +775,7 @@ export default function App() {
           canvas.width = Math.max(1, Math.round(vw * scale));
           canvas.height = Math.max(1, Math.round(vh * scale));
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.52);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.45);
           const commaIdx = dataUrl.indexOf(',');
           if (commaIdx !== -1) {
             sendWsMessage({
@@ -704,9 +783,10 @@ export default function App() {
               imageBase64: dataUrl.slice(commaIdx + 1),
             });
           }
-        }, 200);
+        }, 66);
       } catch {
-        // Ignore browser camera permission denials during fallback
+        // Fallback when webcam is unavailable or occupied by another browser tab
+        startSimCanvasFallback();
       }
     };
 

@@ -9,6 +9,7 @@ import {
   Eye,
   Flame,
   Lock,
+  LogOut,
   QrCode,
   Radio,
   Shield,
@@ -1070,6 +1071,19 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             aria-label={muted ? 'Unmute sound' : 'Mute sound'}
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              haptics.impact('light');
+              setConfirmLeaveOpen(true);
+            }}
+            className="min-h-[44px] px-2.5 rounded-xl bg-red-500/12 hover:bg-red-500/22 border border-red-500/30 flex items-center justify-center gap-1.5 text-red-200 text-xs font-bold transition-colors"
+            aria-label="Leave Lobby"
+            title="Leave Lobby"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Leave</span>
           </button>
         </div>
       </header>
@@ -2164,6 +2178,18 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 </motion.div>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                haptics.impact('light');
+                setConfirmLeaveOpen(true);
+              }}
+              className="w-full min-h-[46px] rounded-xl bg-red-500/12 hover:bg-red-500/22 border border-red-500/35 text-red-200 font-bold text-xs tracking-wide uppercase flex items-center justify-center gap-2 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Leave Lobby</span>
+            </button>
           </motion.div>
         )}
         </AnimatePresence>
@@ -2570,7 +2596,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
         )}
       </AnimatePresence>
 
-      {/* SECURITY ROOM 5 FPS CCTV MONITOR MODAL */}
+      {/* SECURITY ROOM 15 FPS CCTV MONITOR MODAL */}
       <AnimatePresence>
         {showSecurityMonitor && state.phase === 'PLAYING' && state.self.alive && (
           <SecurityMonitorModal
@@ -3029,54 +3055,111 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           )}
       </AnimatePresence>
 
-      {/* LEAVE LOBBY CONFIRMATION POPUP */}
+      {/* LEAVE LOBBY CONFIRMATION POPUP (SKELD AIRLOCK EJECTION) */}
       <AnimatePresence>
         {confirmLeaveOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
+            onClick={() => {
+              haptics.impact('light');
+              setConfirmLeaveOpen(false);
+            }}
+            className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
           >
             <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 10 }}
+              initial={{ opacity: 0, scale: 0.92, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94 }}
-              className="w-full max-w-sm bg-[#151C28] border border-white/15 rounded-2xl p-5 space-y-4 shadow-2xl"
+              exit={{ opacity: 0, scale: 0.92, y: 8 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm bg-[#0E1420] border-2 border-red-500/45 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(239,68,68,0.22)]"
             >
-              <div className="space-y-1.5">
-                <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-red-400">
-                  Confirm Exit
+              {/* Top Airlock Hazard Bar */}
+              <div className="h-2 w-full bg-[repeating-linear-gradient(-45deg,#ef4444,#ef4444_10px,#1e1b24_10px,#1e1b24_20px)]" />
+
+              {/* Space Viewport Banner */}
+              <div className="relative bg-[#050811] border-b border-white/10 px-5 py-4 overflow-hidden">
+                <div className="pointer-events-none absolute inset-0 opacity-70">
+                  <span className="absolute top-2.5 left-6 w-1 h-1 rounded-full bg-white/80" />
+                  <span className="absolute top-6 left-20 w-0.5 h-0.5 rounded-full bg-cyan-300/80" />
+                  <span className="absolute bottom-3 left-12 w-1 h-1 rounded-full bg-white/50" />
+                  <span className="absolute top-3 right-12 w-1 h-1 rounded-full bg-cyan-200/90" />
+                  <span className="absolute bottom-4 right-24 w-0.5 h-0.5 rounded-full bg-white/70" />
+                  <span className="absolute top-9 right-5 w-1 h-1 rounded-full bg-red-300/70" />
                 </div>
-                <h3 className="font-display text-2xl font-bold text-white">
-                  Leave Lobby?
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Are you sure you want to leave lobby <span className="font-mono font-bold text-cyan-300">{state.sessionCode}</span>? Your saved auto-rejoin session will be cleared.
-                </p>
+
+                <div className="relative flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-red-500/15 border border-red-400/35 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-red-300">
+                      <AlertTriangle className="w-3 h-3" />
+                      <span>Airlock Override</span>
+                    </div>
+                    <div className="font-mono text-[11px] text-cyan-300/90 tracking-wider">
+                      VESSEL // {state.sessionCode}
+                    </div>
+                  </div>
+
+                  <motion.div
+                    animate={{ y: [0, -4, 0], rotate: [-4, 4, -4] }}
+                    transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
+                    className="shrink-0 pr-1"
+                  >
+                    <CrewmateAvatar
+                      color={state.self.color}
+                      alive={state.self.alive}
+                      ghost={!state.self.alive}
+                      size={46}
+                    />
+                  </motion.div>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    haptics.impact('light');
-                    setConfirmLeaveOpen(false);
-                  }}
-                  className="min-h-[44px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-slate-200 font-semibold text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    haptics.impact('medium');
-                    setConfirmLeaveOpen(false);
-                    onLeaveSession();
-                  }}
-                  className="min-h-[44px] rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs"
-                >
-                  Leave Lobby
-                </button>
+
+              {/* Body & Actions */}
+              <div className="p-5 space-y-4">
+                <div className="space-y-1.5">
+                  <h3 className="font-display text-2xl font-black tracking-wide text-white uppercase">
+                    {state.phase === 'LOBBY' ? 'Eject From Lobby?' : 'Abandon Mission?'}
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {state.phase === 'LOBBY' ? (
+                      <>
+                        Ready to step out the airlock of{' '}
+                        <span className="font-mono font-bold text-cyan-300">{state.sessionCode}</span>?
+                        Your saved auto-rejoin tether will be cleared.
+                      </>
+                    ) : (
+                      <>
+                        Leaving <span className="font-mono font-bold text-cyan-300">{state.sessionCode}</span>{' '}
+                        mid-flight will disconnect you from the crew and clear your saved auto-rejoin tether.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      haptics.impact('light');
+                      setConfirmLeaveOpen(false);
+                    }}
+                    className="min-h-[46px] rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-cyan-400/25 text-slate-100 font-bold text-xs tracking-wide uppercase transition-colors"
+                  >
+                    Stay Aboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      haptics.impact('medium');
+                      setConfirmLeaveOpen(false);
+                      onLeaveSession();
+                    }}
+                    className="min-h-[46px] rounded-xl bg-red-600 hover:bg-red-500 border border-red-400/40 text-white font-black text-xs tracking-wide uppercase shadow-[0_0_20px_rgba(239,68,68,0.35)] transition-colors"
+                  >
+                    Eject &amp; Leave
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
