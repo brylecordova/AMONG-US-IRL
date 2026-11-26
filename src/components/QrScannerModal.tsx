@@ -24,6 +24,7 @@ declare global {
     __onAndroidQrScanned?: (rawText: string) => void;
     __onAndroidSecurityFrame?: (base64Jpeg: string) => void;
     __onAndroidScannerBusyChanged?: (busy: boolean) => void;
+    __onAndroidLeaveLobby?: () => void;
   }
 }
 

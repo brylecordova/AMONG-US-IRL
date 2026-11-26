@@ -24,6 +24,7 @@ import {
 import { AnimatedCrewmate } from '../components/AnimatedCrewmate';
 import { NativeQrScannerModal } from '../components/NativeQrScannerModal';
 import { RoleSplashOverlay } from '../components/RoleSplashOverlay';
+import { SecurityMonitorModal } from '../components/SecurityMonitorModal';
 import { TaskMiniGamesModal } from '../components/TaskMiniGamesModal';
 import { haptics } from '../haptics';
 
@@ -35,6 +36,20 @@ interface GameHudScreenProps {
   meetingAlertTrigger: number;
   sabotageAlertTrigger: number;
   missionStartedTrigger: number;
+  securityWatcherCount?: number;
+  securityLatestFrame?: { targetPlayerId: string; imageBase64: string; ts: number } | null;
+  securityTargetStatus?: {
+    targetPlayerId: string;
+    busy: boolean;
+    offline: boolean;
+    lostReason: string | null;
+  } | null;
+  securityJammed?: boolean;
+  securityForceClosedSeq?: number;
+  securityErrorEvent?: { seq: number; message: string } | null;
+  onSendWsMessage?: (msg: Record<string, unknown>) => void;
+  onScannerOpenChange?: (open: boolean) => void;
+  onClearSecurityFeedState?: () => void;
   onUpdateState: (next: ClientGameState) => void;
   onLeaveSession: () => void;
 }
@@ -53,6 +68,15 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   meetingAlertTrigger,
   sabotageAlertTrigger,
   missionStartedTrigger,
+  securityWatcherCount = 0,
+  securityLatestFrame = null,
+  securityTargetStatus = null,
+  securityJammed = false,
+  securityForceClosedSeq = 0,
+  securityErrorEvent = null,
+  onSendWsMessage,
+  onScannerOpenChange,
+  onClearSecurityFeedState,
   onUpdateState,
   onLeaveSession,
 }) => {
@@ -73,6 +97,9 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sabotageBusy, setSabotageBusy] = useState(false);
   const [colorBusy, setColorBusy] = useState(false);
+  const [confirmLeaveVisible, setConfirmLeaveVisible] = useState(false);
+  const [showSecurityMonitor, setShowSecurityMonitor] = useState(false);
+  const [selectedSecurityTargetId, setSelectedSecurityTargetId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const [localKillRemaining, setLocalKillRemaining] = useState(state.self.killCooldownRemainingSec);
   const [localScanRemaining, setLocalScanRemaining] = useState(state.self.scanCooldownRemainingSec);
@@ -187,6 +214,8 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
       setShowTerminal(false);
       setTerminalUnlocked(false);
       setDeadBodyFound(null);
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
     }
 
     if (
@@ -200,6 +229,25 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
 
     prevPhaseRef.current = state.phase;
   }, [missionStartedTrigger, state.phase]);
+
+  useEffect(() => {
+    onScannerOpenChange?.(showScanner);
+  }, [showScanner, onScannerOpenChange]);
+
+  useEffect(() => {
+    if (securityForceClosedSeq > 0 && showSecurityMonitor) {
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
+      onClearSecurityFeedState?.();
+    }
+  }, [securityForceClosedSeq, showSecurityMonitor, onClearSecurityFeedState]);
+
+  useEffect(() => {
+    if (securityErrorEvent?.message) {
+      haptics.notify('error');
+      showToast(securityErrorEvent.message);
+    }
+  }, [securityErrorEvent]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -293,6 +341,37 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
           error: err instanceof Error ? err.message : 'Unable to call meeting.',
         };
       }
+    }
+
+    if (parsed.kind === 'SECURITY_CAM') {
+      if (state.phase !== 'PLAYING') {
+        haptics.notify('error');
+        return {
+          valid: false,
+          error: 'Security monitors are only active during gameplay.',
+        };
+      }
+      if (!state.self.alive) {
+        haptics.notify('error');
+        return {
+          valid: false,
+          error: 'Only alive crewmates can operate Security Monitors.',
+        };
+      }
+      if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
+        haptics.notify('error');
+        return {
+          valid: false,
+          error: `Comms Signal Jam active! Security cameras offline for ${signalJamLeftSec}s.`,
+        };
+      }
+      setShowScanner(false);
+      setSelectedSecurityTargetId(null);
+      onClearSecurityFeedState?.();
+      onSendWsMessage?.({ type: 'security:open' });
+      haptics.notify('success');
+      setShowSecurityMonitor(true);
+      return { valid: true };
     }
 
     if (parsed.kind === 'PLAYER') {
@@ -568,7 +647,13 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
             </Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.leaveBtn} onPress={onLeaveSession}>
+        <TouchableOpacity
+          style={styles.leaveBtn}
+          onPress={() => {
+            haptics.impact('light');
+            setConfirmLeaveVisible(true);
+          }}
+        >
           <Text style={styles.leaveBtnText}>Exit</Text>
         </TouchableOpacity>
       </View>
@@ -656,6 +741,17 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 </View>
               ))}
             </View>
+
+            <TouchableOpacity
+              style={styles.leaveLobbyBtn}
+              activeOpacity={0.8}
+              onPress={() => {
+                haptics.impact('light');
+                setConfirmLeaveVisible(true);
+              }}
+            >
+              <Text style={styles.leaveLobbyBtnText}>Leave Lobby</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -685,7 +781,29 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                   COMMS SIGNAL JAM ({signalJamLeftSec}s)
                 </Text>
                 <Text style={styles.sabotageSub}>
-                  Emergency Meeting button disabled temporarily. Dead body reports still work.
+                  Emergency Meeting button and Security Cameras disabled temporarily. Dead body reports still work.
+                </Text>
+              </Animated.View>
+            ) : null}
+
+            {securityWatcherCount > 0 &&
+            state.self.alive &&
+            state.activeSabotage?.kind !== 'SIGNAL_JAM' ? (
+              <Animated.View
+                style={[
+                  styles.sabotageBanner,
+                  {
+                    borderColor: '#EF4444',
+                    backgroundColor: '#2A0B12',
+                    transform: [{ scale: pulseAnim }],
+                  },
+                ]}
+              >
+                <Text style={[styles.sabotageTitle, { color: '#FCA5A5' }]}>
+                  ● REC • SECURITY CAM ACTIVE
+                </Text>
+                <Text style={styles.sabotageSub}>
+                  Another player is viewing your camera feed (5 FPS) from the Security monitor.
                 </Text>
               </Animated.View>
             ) : null}
@@ -1313,6 +1431,43 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
         onClose={() => setActiveTask(null)}
       />
 
+      {/* SECURITY CAMERA MONITOR (1 PLAYER AT A TIME • 5 FPS) */}
+      <SecurityMonitorModal
+        visible={showSecurityMonitor && state.phase === 'PLAYING'}
+        players={state.players}
+        selfPlayerId={state.self.playerId}
+        jammed={securityJammed || state.activeSabotage?.kind === 'SIGNAL_JAM'}
+        selectedTargetId={selectedSecurityTargetId}
+        latestFrame={securityLatestFrame}
+        targetBusy={Boolean(
+          securityTargetStatus &&
+            securityTargetStatus.targetPlayerId === selectedSecurityTargetId &&
+            securityTargetStatus.busy,
+        )}
+        targetOffline={Boolean(
+          securityTargetStatus &&
+            securityTargetStatus.targetPlayerId === selectedSecurityTargetId &&
+            securityTargetStatus.offline,
+        )}
+        targetLostReason={
+          securityTargetStatus &&
+          securityTargetStatus.targetPlayerId === selectedSecurityTargetId
+            ? securityTargetStatus.lostReason
+            : null
+        }
+        onSelectTarget={(targetPlayerId) => {
+          setSelectedSecurityTargetId(targetPlayerId);
+          onClearSecurityFeedState?.();
+          onSendWsMessage?.({ type: 'security:select', targetPlayerId });
+        }}
+        onClose={() => {
+          setShowSecurityMonitor(false);
+          setSelectedSecurityTargetId(null);
+          onClearSecurityFeedState?.();
+          onSendWsMessage?.({ type: 'security:close' });
+        }}
+      />
+
       {/* FORENSIC SCAN RESULT MODAL */}
       <Modal visible={Boolean(forensicResult)} transparent statusBarTranslucent animationType="fade">
         <View style={[styles.modalBackdrop, modalSafePadding]}>
@@ -1408,6 +1563,57 @@ export const GameHudScreen: React.FC<GameHudScreenProps> = ({
                 onPress={() => setShowKilledModal(false)}
               >
                 <Text style={styles.scanActionText}>Enter Ghost Mode</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      {/* CONFIRM LEAVE LOBBY / EXIT MODAL */}
+      <Modal
+        visible={confirmLeaveVisible}
+        transparent
+        statusBarTranslucent
+        animationType="fade"
+        onRequestClose={() => setConfirmLeaveVisible(false)}
+      >
+        <View style={[styles.modalBackdrop, modalSafePadding]}>
+          <View style={[styles.modalCard, { borderColor: '#EF4444' }]}>
+            <Text style={[styles.kicker, { color: '#F87171' }]}>CONFIRM EXIT</Text>
+            <Text style={[styles.panelTitle, { marginTop: 4 }]}>
+              {state.phase === 'LOBBY' ? 'Leave Lobby?' : 'Leave Mission?'}
+            </Text>
+            <Text style={styles.panelSub}>
+              Are you sure you want to exit {state.sessionCode}? You will leave the current session and clear any saved auto-rejoin data.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+              <TouchableOpacity
+                style={[styles.leaveBtn, { flex: 1, paddingVertical: 13, alignItems: 'center' }]}
+                onPress={() => {
+                  haptics.impact('light');
+                  setConfirmLeaveVisible(false);
+                }}
+              >
+                <Text style={[styles.leaveBtnText, { fontSize: 13 }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.leaveBtn,
+                  {
+                    flex: 1,
+                    paddingVertical: 13,
+                    alignItems: 'center',
+                    backgroundColor: '#DC2626',
+                  },
+                ]}
+                onPress={() => {
+                  haptics.impact('medium');
+                  setConfirmLeaveVisible(false);
+                  onLeaveSession();
+                }}
+              >
+                <Text style={[styles.leaveBtnText, { color: '#FFFFFF', fontSize: 13 }]}>
+                  Leave Lobby
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1576,6 +1782,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     flex: 1,
+  },
+  leaveLobbyBtn: {
+    marginTop: 16,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  leaveLobbyBtnText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '800',
   },
   sabotageBanner: {
     backgroundColor: '#1A1215',

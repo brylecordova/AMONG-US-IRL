@@ -7,6 +7,7 @@
     <string name="host_url_hint">http://192.168.1.50:3000/?join=ABCD</string>
     <string name="connect_btn">Connect to Mission</string>
     <string name="change_host">Change Host</string>
+    <string name="leave_lobby">Leave Lobby</string>
     <string name="reload_page">Reload</string>
     <string name="scanner_close">Close</string>
     <string name="scanner_torch">Light</string>

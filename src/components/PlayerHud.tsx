@@ -144,6 +144,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [shieldBusy, setShieldBusy] = useState(false);
   const [reactorActionBusy, setReactorActionBusy] = useState(false);
   const [colorBusy, setColorBusy] = useState(false);
+  const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
   const lastVisualAlertIdRef = useRef<string | null>(null);
@@ -1186,7 +1187,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 type="button"
                 onClick={() => {
                   haptics.impact('light');
-                  onLeaveSession();
+                  setConfirmLeaveOpen(true);
                 }}
                 className="w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-400"
               >
@@ -3026,6 +3027,60 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
               </motion.div>
             </motion.div>
           )}
+      </AnimatePresence>
+
+      {/* LEAVE LOBBY CONFIRMATION POPUP */}
+      <AnimatePresence>
+        {confirmLeaveOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] px-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              className="w-full max-w-sm bg-[#151C28] border border-white/15 rounded-2xl p-5 space-y-4 shadow-2xl"
+            >
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-red-400">
+                  Confirm Exit
+                </div>
+                <h3 className="font-display text-2xl font-bold text-white">
+                  Leave Lobby?
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Are you sure you want to leave lobby <span className="font-mono font-bold text-cyan-300">{state.sessionCode}</span>? Your saved auto-rejoin session will be cleared.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.impact('light');
+                    setConfirmLeaveOpen(false);
+                  }}
+                  className="min-h-[44px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-slate-200 font-semibold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.impact('medium');
+                    setConfirmLeaveOpen(false);
+                    onLeaveSession();
+                  }}
+                  className="min-h-[44px] rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs"
+                >
+                  Leave Lobby
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

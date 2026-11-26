@@ -28,6 +28,7 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -155,6 +156,10 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnSwitchHost).setOnClickListener {
             showLauncher()
+        }
+
+        findViewById<Button>(R.id.btnLeaveLobby).setOnClickListener {
+            confirmAndLeaveLobby()
         }
 
         ContextCompat.registerReceiver(
@@ -363,6 +368,50 @@ class MainActivity : AppCompatActivity() {
         webContainer.visibility = View.GONE
         launcherContainer.visibility = View.VISIBLE
         ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
+    }
+
+    private fun confirmAndLeaveLobby() {
+        AlertDialog.Builder(this)
+            .setTitle("Leave Lobby?")
+            .setMessage("Are you sure you want to leave the current lobby? This will exit your mission and clear saved auto-rejoin data.")
+            .setNegativeButton("Stay", null)
+            .setPositiveButton("Leave Lobby") { _, _ ->
+                leaveCurrentLobby()
+            }
+            .show()
+    }
+
+    private fun leaveCurrentLobby() {
+        scannerOpen = false
+        matchActive = false
+        cameraPermissionRequestedForMatch = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        SecurityCamService.stopAll(this)
+        sendCloseScannerBroadcast()
+
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .remove(KEY_SAVED_SESSION_CODE)
+            .remove(KEY_SAVED_REJOIN_CODE)
+            .apply()
+
+        val fallbackOrigin = activeOrigin
+        val js = """
+            (function() {
+              try { window.localStorage.removeItem('skeld_irl_saved_player_session'); } catch (e) {}
+              if (typeof window.__onAndroidLeaveLobby === 'function') {
+                window.__onAndroidLeaveLobby();
+                return 'handled';
+              }
+              return 'reload';
+            })();
+        """.trimIndent()
+
+        webView.evaluateJavascript(js) { result ->
+            if (result != "\"handled\"" && !fallbackOrigin.isNullOrBlank()) {
+                webView.loadUrl(fallbackOrigin)
+            }
+        }
     }
 
     private fun ensureSecurityPermissionsAndStandby(forcePrompt: Boolean = false) {

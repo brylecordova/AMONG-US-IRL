@@ -213,6 +213,12 @@ export const PLAYER_COLORS: PlayerColorDef[] = [
   { id: 'lime', label: 'Lime', hex: '#50EF39', shade: '#15A742', code: 'LIM', textOnSuit: '#0F172A' },
 ];
 
+export const SECURITY_CAMERA_SHORT_CODE = 'CAMS';
+
+export function buildSecurityCameraQrPayload(sessionCode: string): string {
+  return `SKELD|SECURITY|${sessionCode.trim().toUpperCase()}|CAMS`;
+}
+
 export type SecretRole = 'CREWMATE' | 'INVESTIGATOR' | 'IMPOSTOR' | 'SHAPESHIFTER';
 export type PublicAlignment = 'CREWMATE' | 'IMPOSTOR';
 export type GamePhase = 'LOBBY' | 'PLAYING' | 'MEETING' | 'ENDED';
@@ -329,6 +335,7 @@ export type ParsedQrAction =
   | { kind: 'TASK'; sessionCode?: string; task: SkeldTaskDef }
   | { kind: 'PLAYER'; sessionCode?: string; color: PlayerColorDef }
   | { kind: 'MEETING'; sessionCode?: string }
+  | { kind: 'SECURITY_CAM'; sessionCode?: string }
   | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string }
   | { kind: 'REJOIN'; sessionCode: string; rejoinCode: string; serverOrigin?: string };
 
@@ -397,12 +404,24 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     if (kind === 'MEETING') {
       return { kind: 'MEETING', sessionCode };
     }
+    if (kind === 'SECURITY' || kind === 'CCTV' || kind === 'CAM' || kind === 'CAMS') {
+      return { kind: 'SECURITY_CAM', sessionCode };
+    }
   }
 
-  // Manual short codes (e.g., WIR1, RED, EMRG)
+  // Manual short codes (e.g., WIR1, CAMS, RED, EMRG)
   const upper = trimmed.toUpperCase().replace(/[^A-Z0-9-]/g, '');
   if (upper === 'EMRG' || upper === 'MEET' || upper === 'CAFETERIA') {
     return { kind: 'MEETING' };
+  }
+  if (
+    upper === SECURITY_CAMERA_SHORT_CODE ||
+    upper === 'SEC1' ||
+    upper === 'SECCAM' ||
+    upper === 'SECURITY' ||
+    upper === 'CCTV'
+  ) {
+    return { kind: 'SECURITY_CAM' };
   }
 
   const taskByShort = SKELD_TASKS.find(

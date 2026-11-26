@@ -599,7 +599,19 @@ export default function App() {
   }, [isMatchAlivePlayer, isSignalJamActive]);
 
   useEffect(() => {
+    window.__onAndroidLeaveLobby = () => {
+      clearSavedPlayerSession();
+      setSecurityWatcherCount(0);
+      setSecurityLatestFrame(null);
+      setSecurityTargetStatus(null);
+      window.AmongUsAndroid?.setSecurityCaptureActive?.(false);
+      window.AmongUsAndroid?.setMatchActive?.(false);
+      setPlayerToken(null);
+      setPlayerState(null);
+      setScreen('TITLE');
+    };
     return () => {
+      window.__onAndroidLeaveLobby = undefined;
       window.AmongUsAndroid?.setSecurityCaptureActive?.(false);
       window.AmongUsAndroid?.setMatchActive?.(false);
     };

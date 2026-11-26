@@ -33,7 +33,7 @@ interface NativeQrScannerModalProps {
 export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
   visible,
   title = 'Skeld Optical Scanner',
-  subtitle = 'Point your phone camera at any Task, Player Back, Meeting, or Join QR code.',
+  subtitle = 'Point your phone camera at any Task, Security Cam, Player Back, Meeting, or Join QR code.',
   hideManualCodes = false,
   onDetected,
   onClose,
@@ -114,7 +114,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
   const handleManualSubmit = () => {
     const parsed = parseQrOrManualInput(manualInput);
     if (!parsed) {
-      setErrorMsg('Enter a valid station code (e.g. WIR1, RED, EMRG) or Join URL.');
+      setErrorMsg('Enter a valid station code (e.g. WIR1, CAMS, RED, EMRG) or Join URL.');
       return;
     }
     void submitParsed(parsed, manualInput.trim(), false);
@@ -196,7 +196,7 @@ export const NativeQrScannerModal: React.FC<NativeQrScannerModalProps> = ({
             <View style={styles.manualRow}>
               <TextInput
                 style={styles.input}
-                placeholder="e.g. WIR1, RED, EMRG"
+                placeholder="e.g. WIR1, CAMS, RED, EMRG"
                 placeholderTextColor="#64748B"
                 value={manualInput}
                 onChangeText={(txt) => {
