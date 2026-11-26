@@ -769,6 +769,35 @@ export async function kickPlayerFromLobby(
   return session;
 }
 
+export async function leaveGameSession(
+  sessionCode: string,
+  playerToken: string,
+): Promise<{
+  session: StoredSession | null;
+  departed: { playerId: string; name: string; color: PlayerColorId } | null;
+}> {
+  const session = await getSession(sessionCode);
+  if (!session) return { session: null, departed: null };
+
+  const player = session.players.find((p) => p.playerToken === playerToken);
+  if (!player) return { session, departed: null };
+
+  const departed = {
+    playerId: player.playerId,
+    name: player.name,
+    color: player.color,
+  };
+
+  if (session.phase === 'LOBBY' || session.phase === 'ENDED') {
+    session.players = session.players.filter((p) => p.playerId !== player.playerId);
+  } else {
+    player.connected = false;
+  }
+
+  await saveSession(session);
+  return { session, departed };
+}
+
 export async function startMission(
   sessionCode: string,
   hostToken: string,

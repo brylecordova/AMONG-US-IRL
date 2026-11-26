@@ -27,6 +27,7 @@ import {
   forceStartMeetingDiscussion,
   joinGameSession,
   kickPlayerFromLobby,
+  leaveGameSession,
   markPlayerArrived,
   processPlayerBackScan,
   projectForHost,
@@ -537,7 +538,15 @@ async function main() {
 
       const { rejoinCode } = req.body as { rejoinCode?: unknown };
       const { session, player } = await rejoinGameSession(code, rejoinCode);
-      await broadcastSessionState(session.sessionCode);
+      await broadcastSessionState(session.sessionCode, {
+        type: 'player:rejoined',
+        payload: {
+          playerId: player.playerId,
+          name: player.name,
+          color: player.color,
+          phase: session.phase,
+        },
+      });
 
       res.json({
         playerToken: player.playerToken,
@@ -545,6 +554,40 @@ async function main() {
       });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to rejoin mission.' });
+    }
+  });
+
+  // Voluntary Leave Lobby / Eject from session
+  app.post('/api/sessions/:code/leave', async (req, res) => {
+    try {
+      const code = sanitizeSessionCode(req.params.code);
+      const playerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+      if (!code || !playerToken) return res.status(401).json({ error: 'Unauthorized.' });
+
+      const { session, departed } = await leaveGameSession(code, playerToken);
+      if (departed && session) {
+        clearWatcher(code, departed.playerId);
+        const watchersOfDeparted = getTargetWatcherIds(code, departed.playerId);
+        for (const watcherId of watchersOfDeparted) {
+          sendToPlayerSockets(code, watcherId, {
+            type: 'security:target_offline',
+            payload: { targetPlayerId: departed.playerId },
+          });
+        }
+        await broadcastSessionState(code, {
+          type: 'player:left',
+          payload: {
+            playerId: departed.playerId,
+            name: departed.name,
+            color: departed.color,
+            phase: session.phase,
+          },
+        });
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to leave session.' });
     }
   });
 
@@ -1132,6 +1175,17 @@ async function main() {
           const role =
             msg.role === 'HOST' ? 'HOST' : msg.role === 'PUBLIC' ? 'PUBLIC' : 'PLAYER';
           let playerId: string | undefined;
+          let rejoinedEvent:
+            | {
+                type: 'player:rejoined';
+                payload: {
+                  playerId: string;
+                  name: string;
+                  color: string;
+                  phase: string;
+                };
+              }
+            | undefined;
 
           if (role === 'PUBLIC') {
             clientMeta = { ws, sessionCode: code, role: 'PUBLIC', token: '' };
@@ -1161,8 +1215,20 @@ async function main() {
               ws.send(JSON.stringify({ type: 'player:removed' }));
               return;
             }
+            const wasDisconnected = !found.connected;
             playerId = found.playerId;
             found.connected = true;
+            if (wasDisconnected) {
+              rejoinedEvent = {
+                type: 'player:rejoined',
+                payload: {
+                  playerId: found.playerId,
+                  name: found.name,
+                  color: found.color,
+                  phase: session.phase,
+                },
+              };
+            }
           }
 
           clientMeta = { ws, sessionCode: code, role, token: msg.token, playerId };
@@ -1179,7 +1245,7 @@ async function main() {
               }),
             );
           } else {
-            await broadcastSessionState(code);
+            await broadcastSessionState(code, rejoinedEvent);
             if (playerId) {
               const activeWatchers = getTargetWatcherIds(code, playerId).length;
               ws.send(

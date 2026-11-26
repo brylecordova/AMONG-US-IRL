@@ -65,6 +65,15 @@ interface PlayerHudProps {
     targetName?: string;
     sheriffName?: string;
   } | null;
+  crewPresenceEvent?: {
+    seq: number;
+    kind: 'LEFT' | 'REJOINED';
+    playerId: string;
+    playerName: string;
+    playerColor: PlayerColorId;
+    phase?: string;
+  } | null;
+  androidLeaveTrigger?: number;
   securityWatcherCount: number;
   securityLatestFrame: { targetPlayerId: string; imageBase64: string; ts: number } | null;
   securityTargetStatus: {
@@ -80,6 +89,7 @@ interface PlayerHudProps {
   onScannerOpenChange?: (open: boolean) => void;
   onClearSecurityFeedState: () => void;
   onUpdateState: (next: ClientGameState) => void;
+  onBeginEjectLeave?: () => void;
   onLeaveSession: () => void;
 }
 
@@ -100,6 +110,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   missionStartedTrigger,
   shieldBlockedEvent,
   sheriffActionEvent,
+  crewPresenceEvent,
+  androidLeaveTrigger,
   securityWatcherCount,
   securityLatestFrame,
   securityTargetStatus,
@@ -110,6 +122,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   onScannerOpenChange,
   onClearSecurityFeedState,
   onUpdateState,
+  onBeginEjectLeave,
   onLeaveSession,
 }) => {
   const [scannerMode, setScannerMode] = useState<ScanMode | null>(null);
@@ -146,9 +159,22 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [reactorActionBusy, setReactorActionBusy] = useState(false);
   const [colorBusy, setColorBusy] = useState(false);
   const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
+  const [ejectingLeave, setEjectingLeave] = useState(false);
+  const [activePresenceAlert, setActivePresenceAlert] = useState<{
+    seq: number;
+    kind: 'LEFT' | 'REJOINED';
+    playerId: string;
+    playerName: string;
+    playerColor: PlayerColorId;
+    phase?: string;
+  } | null>(null);
   const prevPhaseRef = useRef(state.phase);
   const roleSplashShownRef = useRef(false);
   const lastVisualAlertIdRef = useRef<string | null>(null);
+  const lastPresenceSeqRef = useRef<number>(0);
+  const presenceTimerRef = useRef<number | null>(null);
+  const ejectTriggeredRef = useRef(false);
+  const ejectTimerRef = useRef<number | null>(null);
   const serverSkewMsRef = useRef(state.serverTime - Date.now());
   const holdingReactorRef = useRef(false);
   const prevReactorActiveRef = useRef(state.activeSabotage?.kind === 'REACTOR');
@@ -422,6 +448,81 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setToastMsg(securityErrorEvent.message);
     }
   }, [securityErrorEvent]);
+
+  // Show crew departure / rejoin banner when another player leaves or reconnects
+  useEffect(() => {
+    if (!crewPresenceEvent || crewPresenceEvent.seq === lastPresenceSeqRef.current) return;
+    lastPresenceSeqRef.current = crewPresenceEvent.seq;
+    if (crewPresenceEvent.playerId === state.self.playerId) return;
+
+    setActivePresenceAlert(crewPresenceEvent);
+    soundEngine.playClick();
+    haptics.impact('light');
+
+    if (presenceTimerRef.current !== null) {
+      window.clearTimeout(presenceTimerRef.current);
+    }
+    presenceTimerRef.current = window.setTimeout(() => {
+      setActivePresenceAlert(null);
+      presenceTimerRef.current = null;
+    }, 4500);
+  }, [crewPresenceEvent, state.self.playerId]);
+
+  const finishEjectLeave = () => {
+    if (ejectTimerRef.current !== null) {
+      window.clearTimeout(ejectTimerRef.current);
+      ejectTimerRef.current = null;
+    }
+    setEjectingLeave(false);
+    onLeaveSession();
+  };
+
+  const beginEjectAndLeave = () => {
+    if (ejectTriggeredRef.current) return;
+    ejectTriggeredRef.current = true;
+
+    setConfirmLeaveOpen(false);
+    setActiveTask(null);
+    setScannerMode(null);
+    setShowTerminal(false);
+    setShowSecurityMonitor(false);
+    setShowReactorHoldModal(false);
+    setShowReactorArmedModal(false);
+    onBeginEjectLeave?.();
+
+    fetch(`/api/sessions/${state.sessionCode}/leave`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${playerToken}`,
+      },
+      keepalive: true,
+    }).catch(() => {});
+
+    soundEngine.playEjectionWhoosh();
+    haptics.impact('heavy');
+    setEjectingLeave(true);
+
+    ejectTimerRef.current = window.setTimeout(() => {
+      finishEjectLeave();
+    }, 2350);
+  };
+
+  useEffect(() => {
+    if (androidLeaveTrigger && androidLeaveTrigger > 0) {
+      beginEjectAndLeave();
+    }
+  }, [androidLeaveTrigger]);
+
+  useEffect(() => {
+    return () => {
+      if (presenceTimerRef.current !== null) {
+        window.clearTimeout(presenceTimerRef.current);
+      }
+      if (ejectTimerRef.current !== null) {
+        window.clearTimeout(ejectTimerRef.current);
+      }
+    };
+  }, []);
 
   const isImpostorTeam =
     state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
@@ -1097,6 +1198,64 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           transition={{ type: 'spring', stiffness: 120, damping: 20 }}
         />
       </div>
+
+      <AnimatePresence>
+        {activePresenceAlert && (
+          <motion.div
+            key={activePresenceAlert.seq}
+            initial={{ opacity: 0, y: -18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -16, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 360, damping: 26 }}
+            className="fixed top-[calc(4.1rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-md pointer-events-auto"
+          >
+            <div
+              className={`rounded-2xl border px-3.5 py-2.5 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 ${
+                activePresenceAlert.kind === 'LEFT'
+                  ? 'bg-[#170F16]/95 border-red-500/45 shadow-[0_10px_30px_rgba(239,68,68,0.22)]'
+                  : 'bg-[#0C1924]/95 border-cyan-400/50 shadow-[0_10px_30px_rgba(34,211,238,0.22)]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <CrewmateAvatar
+                  color={activePresenceAlert.playerColor}
+                  alive={activePresenceAlert.kind === 'REJOINED'}
+                  size={32}
+                />
+                <div className="min-w-0">
+                  <div
+                    className={`font-mono text-[10px] font-bold uppercase tracking-[0.16em] ${
+                      activePresenceAlert.kind === 'LEFT' ? 'text-red-300' : 'text-cyan-300'
+                    }`}
+                  >
+                    {activePresenceAlert.kind === 'LEFT' ? 'Airlock Departure' : 'Crew Tether Restored'}
+                  </div>
+                  <div className="text-xs text-white font-semibold truncate">
+                    {activePresenceAlert.playerName}{' '}
+                    <span className="font-normal text-slate-300">
+                      {activePresenceAlert.kind === 'LEFT'
+                        ? activePresenceAlert.phase === 'LOBBY' || activePresenceAlert.phase === 'ENDED'
+                          ? 'left the lobby.'
+                          : 'left the mission.'
+                        : activePresenceAlert.phase === 'LOBBY'
+                          ? 'rejoined the lobby.'
+                          : 'rejoined the mission.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActivePresenceAlert(null)}
+                className="min-w-[32px] min-h-[32px] rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300 shrink-0"
+                aria-label="Dismiss crew alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {toastMsg && (
@@ -3150,11 +3309,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      haptics.impact('medium');
-                      setConfirmLeaveOpen(false);
-                      onLeaveSession();
-                    }}
+                    onClick={beginEjectAndLeave}
                     className="min-h-[46px] rounded-xl bg-red-600 hover:bg-red-500 border border-red-400/40 text-white font-black text-xs tracking-wide uppercase shadow-[0_0_20px_rgba(239,68,68,0.35)] transition-colors"
                   >
                     Eject &amp; Leave
@@ -3162,6 +3317,119 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 </div>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* FULL-SCREEN SKELD SPACE EJECTION ANIMATION */}
+      <AnimatePresence>
+        {ejectingLeave && (
+          <motion.div
+            key="skeld-space-ejection"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[90] bg-[#03050B] overflow-hidden flex flex-col items-center justify-center select-none"
+          >
+            {/* Deep Starfield */}
+            <div className="pointer-events-none absolute inset-0">
+              {[
+                { top: '8%', left: '12%', size: 2, opacity: 0.8, dur: 2.8 },
+                { top: '14%', left: '68%', size: 3, opacity: 0.9, dur: 2.2 },
+                { top: '21%', left: '34%', size: 2, opacity: 0.65, dur: 3.1 },
+                { top: '27%', left: '88%', size: 2, opacity: 0.85, dur: 2.4 },
+                { top: '34%', left: '19%', size: 3, opacity: 0.75, dur: 2.6 },
+                { top: '42%', left: '54%', size: 2, opacity: 0.55, dur: 3.3 },
+                { top: '53%', left: '78%', size: 3, opacity: 0.9, dur: 2.1 },
+                { top: '61%', left: '15%', size: 2, opacity: 0.7, dur: 2.9 },
+                { top: '68%', left: '43%', size: 2, opacity: 0.8, dur: 2.5 },
+                { top: '76%', left: '84%', size: 3, opacity: 0.85, dur: 2.3 },
+                { top: '83%', left: '28%', size: 2, opacity: 0.6, dur: 3.0 },
+                { top: '90%', left: '61%', size: 2, opacity: 0.75, dur: 2.7 },
+              ].map((star, idx) => (
+                <motion.span
+                  key={idx}
+                  aria-hidden="true"
+                  initial={{ x: 0, opacity: star.opacity * 0.6 }}
+                  animate={{ x: [-8, -68], opacity: [star.opacity * 0.6, star.opacity, star.opacity * 0.5] }}
+                  transition={{ duration: star.dur, repeat: Infinity, ease: 'linear' }}
+                  style={{
+                    top: star.top,
+                    left: star.left,
+                    width: `${star.size}px`,
+                    height: `${star.size}px`,
+                  }}
+                  className="absolute rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.85)]"
+                />
+              ))}
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.08)_0%,rgba(3,5,11,0.85)_68%)]" />
+            </div>
+
+            {/* Airlock Upper & Lower Blast Doors */}
+            <motion.div
+              aria-hidden="true"
+              initial={{ y: 0 }}
+              animate={{ y: '-100%' }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              className="pointer-events-none absolute top-0 inset-x-0 h-1/2 z-30 bg-[#121826] border-b-4 border-red-500/70 flex flex-col justify-end"
+            >
+              <div className="h-2.5 w-full bg-[repeating-linear-gradient(-45deg,#ef4444,#ef4444_12px,#111827_12px,#111827_24px)] opacity-80" />
+            </motion.div>
+            <motion.div
+              aria-hidden="true"
+              initial={{ y: 0 }}
+              animate={{ y: '100%' }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              className="pointer-events-none absolute bottom-0 inset-x-0 h-1/2 z-30 bg-[#121826] border-t-4 border-red-500/70 flex flex-col justify-start"
+            >
+              <div className="h-2.5 w-full bg-[repeating-linear-gradient(-45deg,#ef4444,#ef4444_12px,#111827_12px,#111827_24px)] opacity-80" />
+            </motion.div>
+
+            {/* Drifting & Tumbling Ejected Crewmate */}
+            <motion.div
+              aria-hidden="true"
+              initial={{ x: '-55vw', y: 12, rotate: -15, scale: 1.05, opacity: 1 }}
+              animate={{
+                x: '65vw',
+                y: [-8, -28, 6, -16],
+                rotate: [0, 260, 540, 760],
+                scale: [1.05, 0.96, 0.78, 0.52],
+                opacity: [1, 1, 0.95, 0.7],
+              }}
+              transition={{ duration: 2.15, ease: [0.18, 0.7, 0.4, 1] }}
+              className="relative z-20 mb-8 drop-shadow-[0_0_28px_rgba(255,255,255,0.22)]"
+            >
+              <CrewmateAvatar
+                color={state.self.color}
+                alive={state.self.alive}
+                ghost={!state.self.alive}
+                size={84}
+              />
+            </motion.div>
+
+            {/* Classic Ejection Caption */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.35, duration: 0.45 }}
+              className="relative z-20 text-center px-6 space-y-2"
+            >
+              <div className="font-display text-4xl sm:text-5xl font-bold tracking-wide text-white drop-shadow-[0_4px_24px_rgba(0,0,0,0.9)]">
+                {state.self.name} was ejected.
+              </div>
+              <div className="font-mono text-xs tracking-[0.24em] uppercase text-cyan-300/80">
+                Airlock Sealed · Vessel {state.sessionCode}
+              </div>
+            </motion.div>
+
+            <button
+              type="button"
+              onClick={finishEjectLeave}
+              className="fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] right-[max(1.5rem,env(safe-area-inset-right))] z-40 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-mono uppercase tracking-wider text-slate-200 transition-colors"
+            >
+              Skip
+            </button>
           </motion.div>
         )}
       </AnimatePresence>

@@ -31,6 +31,7 @@ import {
   getColorDef,
   HostGameState,
   PLAYER_COLORS,
+  PlayerColorId,
   SKELD_TASKS,
 } from '../shared/skeldData';
 import { CrewmateAvatar } from './CrewmateAvatar';
@@ -103,6 +104,14 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [apkError, setApkError] = useState<string | null>(null);
   const [selectedRejoinPlayerId, setSelectedRejoinPlayerId] = useState<string | null>(null);
   const [rejoinUrlCopied, setRejoinUrlCopied] = useState(false);
+  const [crewPresenceNotice, setCrewPresenceNotice] = useState<{
+    seq: number;
+    kind: 'LEFT' | 'REJOINED';
+    playerName: string;
+    playerColor: PlayerColorId;
+    phase?: string;
+  } | null>(null);
+  const presenceNoticeTimerRef = React.useRef<number | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const skewRef = React.useRef(state.serverTime - Date.now());
 
@@ -146,12 +155,57 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   }, [selectedRejoinPlayer]);
 
   useEffect(() => {
+    return () => {
+      if (presenceNoticeTimerRef.current !== null) {
+        window.clearTimeout(presenceNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!hostEvent || hostEvent.seq === lastHandledEventSeqRef.current) return;
     lastHandledEventSeqRef.current = hostEvent.seq;
-    if (muted) return;
 
     const voiceEnabled = Boolean(state.settings.hostVoiceAnnouncer);
     const payload = hostEvent.payload || {};
+
+    if (hostEvent.type === 'player:left' || hostEvent.type === 'player:rejoined') {
+      const playerName = typeof payload.name === 'string' ? payload.name : 'A crewmate';
+      const rawColor = payload.color;
+      const playerColor: PlayerColorId = PLAYER_COLORS.some((c) => c.id === rawColor)
+        ? (rawColor as PlayerColorId)
+        : 'red';
+      const phase = typeof payload.phase === 'string' ? payload.phase : undefined;
+      const kind = hostEvent.type === 'player:left' ? 'LEFT' : 'REJOINED';
+
+      setCrewPresenceNotice({
+        seq: hostEvent.seq,
+        kind,
+        playerName,
+        playerColor,
+        phase,
+      });
+      if (presenceNoticeTimerRef.current !== null) {
+        window.clearTimeout(presenceNoticeTimerRef.current);
+      }
+      presenceNoticeTimerRef.current = window.setTimeout(() => {
+        setCrewPresenceNotice(null);
+        presenceNoticeTimerRef.current = null;
+      }, 4500);
+
+      if (!muted) {
+        soundEngine.playClick();
+        soundEngine.speakHostCue(
+          kind === 'LEFT'
+            ? `${playerName} left the lobby.`
+            : `${playerName} rejoined the mission.`,
+          voiceEnabled,
+        );
+      }
+      return;
+    }
+
+    if (muted) return;
 
     switch (hostEvent.type) {
       case 'mission:started':
@@ -720,6 +774,64 @@ ${compiledCss}
           onResetLobby={() => callHostApi('reset')}
         />
       )}
+
+      <AnimatePresence>
+        {crewPresenceNotice && (
+          <motion.div
+            key={crewPresenceNotice.seq}
+            initial={{ opacity: 0, y: -14, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 360, damping: 26 }}
+            className="no-print fixed top-[4.5rem] right-4 sm:right-6 z-40 max-w-sm w-[calc(100%-2rem)]"
+          >
+            <div
+              className={`rounded-2xl border px-3.5 py-2.5 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 ${
+                crewPresenceNotice.kind === 'LEFT'
+                  ? 'bg-[#170F16]/95 border-red-500/45 shadow-[0_10px_30px_rgba(239,68,68,0.22)]'
+                  : 'bg-[#0C1924]/95 border-cyan-400/50 shadow-[0_10px_30px_rgba(34,211,238,0.22)]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <CrewmateAvatar
+                  color={crewPresenceNotice.playerColor}
+                  alive={crewPresenceNotice.kind === 'REJOINED'}
+                  size={30}
+                />
+                <div className="min-w-0">
+                  <div
+                    className={`font-mono text-[10px] font-bold uppercase tracking-[0.16em] ${
+                      crewPresenceNotice.kind === 'LEFT' ? 'text-red-300' : 'text-cyan-300'
+                    }`}
+                  >
+                    {crewPresenceNotice.kind === 'LEFT' ? 'Crew Departure' : 'Crew Rejoined'}
+                  </div>
+                  <div className="text-xs text-white font-semibold truncate">
+                    {crewPresenceNotice.playerName}{' '}
+                    <span className="font-normal text-slate-300">
+                      {crewPresenceNotice.kind === 'LEFT'
+                        ? crewPresenceNotice.phase === 'LOBBY' || crewPresenceNotice.phase === 'ENDED'
+                          ? 'left the lobby.'
+                          : 'left the mission.'
+                        : crewPresenceNotice.phase === 'LOBBY'
+                          ? 'rejoined the lobby.'
+                          : 'rejoined the mission.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCrewPresenceNotice(null)}
+                className="min-w-[30px] min-h-[30px] rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-300 shrink-0"
+                aria-label="Dismiss crew notification"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {errorMsg && (
         <div className="no-print relative z-20 mx-auto mt-4 max-w-4xl w-full px-6">

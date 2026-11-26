@@ -146,6 +146,17 @@ export default function App() {
     type: string;
     payload?: Record<string, unknown>;
   } | null>(null);
+  const [crewPresenceEvent, setCrewPresenceEvent] = useState<{
+    seq: number;
+    kind: 'LEFT' | 'REJOINED';
+    playerId: string;
+    playerName: string;
+    playerColor: PlayerColorId;
+    phase?: string;
+  } | null>(null);
+  const [androidLeaveTrigger, setAndroidLeaveTrigger] = useState(0);
+  const screenRef = useRef<AppScreen>(screen);
+  const leavingSessionRef = useRef(false);
 
   // Security Camera live CCTV state
   const [securityWatcherCount, setSecurityWatcherCount] = useState(0);
@@ -180,9 +191,21 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    screenRef.current = screen;
+    if (screen !== 'PLAYER') {
+      leavingSessionRef.current = false;
+    }
+  }, [screen]);
+
   // Keep local + Android native storage synced whenever playerState has valid codes
   useEffect(() => {
-    if (screen === 'PLAYER' && playerState?.sessionCode && playerState.self?.rejoinCode) {
+    if (
+      screen === 'PLAYER' &&
+      !leavingSessionRef.current &&
+      playerState?.sessionCode &&
+      playerState.self?.rejoinCode
+    ) {
       persistPlayerSession(playerState.sessionCode, playerState.self.rejoinCode);
     }
   }, [screen, playerState?.sessionCode, playerState?.self?.rejoinCode]);
@@ -457,6 +480,23 @@ export default function App() {
               msg.type === 'game:ended'
             ) {
               setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
+            } else if (msg.type === 'player:left' || msg.type === 'player:rejoined') {
+              const seq = Date.now() + Math.random();
+              setHostEvent({ seq, type: msg.type, payload: payloadRec });
+              if (typeof payloadRec?.playerId === 'string' && typeof payloadRec?.name === 'string') {
+                const rawColor = payloadRec.color;
+                const validColor: PlayerColorId = PLAYER_COLORS.some((c) => c.id === rawColor)
+                  ? (rawColor as PlayerColorId)
+                  : 'red';
+                setCrewPresenceEvent({
+                  seq,
+                  kind: msg.type === 'player:left' ? 'LEFT' : 'REJOINED',
+                  playerId: payloadRec.playerId,
+                  playerName: payloadRec.name,
+                  playerColor: validColor,
+                  phase: typeof payloadRec.phase === 'string' ? payloadRec.phase : undefined,
+                });
+              }
             } else if (msg.type === 'mission:started') {
               setMissionStartedTrigger((n) => n + 1);
               setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
@@ -604,7 +644,12 @@ export default function App() {
 
   useEffect(() => {
     window.__onAndroidLeaveLobby = () => {
+      leavingSessionRef.current = true;
       clearSavedPlayerSession();
+      if (screenRef.current === 'PLAYER') {
+        setAndroidLeaveTrigger((n) => n + 1);
+        return;
+      }
       setSecurityWatcherCount(0);
       setSecurityLatestFrame(null);
       setSecurityTargetStatus(null);
@@ -1040,6 +1085,8 @@ export default function App() {
         missionStartedTrigger={missionStartedTrigger}
         shieldBlockedEvent={shieldBlockedEvent}
         sheriffActionEvent={sheriffActionEvent}
+        crewPresenceEvent={crewPresenceEvent}
+        androidLeaveTrigger={androidLeaveTrigger}
         securityWatcherCount={securityWatcherCount}
         securityLatestFrame={securityLatestFrame}
         securityTargetStatus={securityTargetStatus}
@@ -1053,8 +1100,13 @@ export default function App() {
           setSecurityTargetStatus(null);
         }}
         onUpdateState={setPlayerState}
+        onBeginEjectLeave={() => {
+          leavingSessionRef.current = true;
+          clearSavedPlayerSession();
+        }}
         onLeaveSession={() => {
           clearSavedPlayerSession();
+          setCrewPresenceEvent(null);
           setSecurityWatcherCount(0);
           setSecurityLatestFrame(null);
           setSecurityTargetStatus(null);
