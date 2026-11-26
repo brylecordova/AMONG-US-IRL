@@ -1,10 +1,12 @@
 package com.amongus.irl.shell
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -45,6 +47,22 @@ class MainActivity : AppCompatActivity() {
 
     private var activeOrigin: String? = null
     private var scannerOpen: Boolean = false
+    private var matchActive: Boolean = false
+    private var cameraPermissionRequestedForMatch: Boolean = false
+
+    private val requestSecurityPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val cameraGranted = results[Manifest.permission.CAMERA] == true ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (cameraGranted && matchActive) {
+            SecurityCamService.startStandby(this)
+            if (SecurityCamService.captureRequested && !scannerOpen) {
+                SecurityCamService.setCaptureActive(this, true)
+            }
+        }
+    }
 
     private val joinQrLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -81,6 +99,8 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == QrScannerActivity.ACTION_SCANNER_FINISHED) {
                 scannerOpen = false
+                notifyJsScannerBusy(false)
+                SecurityCamService.resumeAfterScanner(this@MainActivity)
             }
         }
     }
@@ -149,6 +169,19 @@ class MainActivity : AppCompatActivity() {
             IntentFilter(QrScannerActivity.ACTION_SCANNER_FINISHED),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
+
+        SecurityCamFrameBus.setListener { base64Jpeg ->
+            val quoted = JSONObject.quote(base64Jpeg)
+            webView.post {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin != null && originNow == activeOrigin) {
+                    webView.evaluateJavascript(
+                        "if (window.__onAndroidSecurityFrame) { window.__onAndroidSecurityFrame($quoted); }",
+                        null
+                    )
+                }
+            }
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -223,6 +256,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        SecurityCamFrameBus.setListener(null)
+        SecurityCamService.stopAll(this)
         unregisterReceiver(qrDetectedReceiver)
         unregisterReceiver(scannerClosedReceiver)
         webView.removeJavascriptInterface("AmongUsAndroid")
@@ -319,11 +354,59 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLauncher() {
         scannerOpen = false
+        matchActive = false
+        cameraPermissionRequestedForMatch = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        SecurityCamService.stopAll(this)
         sendCloseScannerBroadcast()
         webView.stopLoading()
         webContainer.visibility = View.GONE
         launcherContainer.visibility = View.VISIBLE
         ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
+    }
+
+    private fun ensureSecurityPermissionsAndStandby(forcePrompt: Boolean = false) {
+        val hasCamera = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val needsNotification = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+
+        if (hasCamera && matchActive) {
+            SecurityCamService.startStandby(this)
+        }
+
+        if ((!hasCamera || needsNotification) && (!cameraPermissionRequestedForMatch || forcePrompt)) {
+            cameraPermissionRequestedForMatch = true
+            val toRequest = mutableListOf<String>()
+            if (!hasCamera) {
+                toRequest.add(Manifest.permission.CAMERA)
+            }
+            if (needsNotification && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                toRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (toRequest.isNotEmpty()) {
+                requestSecurityPermissions.launch(toRequest.toTypedArray())
+            }
+        }
+    }
+
+    private fun notifyJsScannerBusy(busy: Boolean) {
+        val flag = if (busy) "true" else "false"
+        webView.post {
+            val originNow = extractOrigin(webView.url)
+            if (activeOrigin != null && originNow == activeOrigin) {
+                webView.evaluateJavascript(
+                    "if (window.__onAndroidScannerBusyChanged) { window.__onAndroidScannerBusyChanged($flag); }",
+                    null
+                )
+            }
+        }
     }
 
     private fun showLauncherError(message: String) {
@@ -378,14 +461,22 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 scannerOpen = true
-                val intent = Intent(this@MainActivity, QrScannerActivity::class.java).apply {
-                    putExtra(QrScannerActivity.EXTRA_MODE, QrScannerActivity.MODE_GAME_SCAN)
-                    putExtra(
-                        QrScannerActivity.EXTRA_TITLE,
-                        title?.takeIf { it.isNotBlank() } ?: "Scan Mission QR"
-                    )
+                notifyJsScannerBusy(true)
+                SecurityCamService.pauseForScanner(this@MainActivity) {
+                    if (!scannerOpen) {
+                        notifyJsScannerBusy(false)
+                        SecurityCamService.resumeAfterScanner(this@MainActivity)
+                        return@pauseForScanner
+                    }
+                    val intent = Intent(this@MainActivity, QrScannerActivity::class.java).apply {
+                        putExtra(QrScannerActivity.EXTRA_MODE, QrScannerActivity.MODE_GAME_SCAN)
+                        putExtra(
+                            QrScannerActivity.EXTRA_TITLE,
+                            title?.takeIf { it.isNotBlank() } ?: "Scan Mission QR"
+                        )
+                    }
+                    startActivity(intent)
                 }
-                startActivity(intent)
             }
         }
 
@@ -394,6 +485,8 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 scannerOpen = false
                 sendCloseScannerBroadcast()
+                notifyJsScannerBusy(false)
+                SecurityCamService.resumeAfterScanner(this@MainActivity)
             }
         }
 
@@ -405,6 +498,59 @@ class MainActivity : AppCompatActivity() {
                 }
                 sendValidationBroadcast(valid, errorMessage.orEmpty())
             }
+        }
+
+        @JavascriptInterface
+        fun setMatchActive(active: Boolean) {
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                matchActive = active
+                if (active) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    ensureSecurityPermissionsAndStandby()
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    cameraPermissionRequestedForMatch = false
+                    SecurityCamService.stopAll(this@MainActivity)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun setSecurityCaptureActive(active: Boolean) {
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                if (active && !matchActive) {
+                    matchActive = true
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+                SecurityCamService.setCaptureActive(this@MainActivity, active)
+            }
+        }
+
+        @JavascriptInterface
+        fun requestCameraPermission() {
+            runOnUiThread {
+                val originNow = extractOrigin(webView.url)
+                if (activeOrigin == null || originNow != activeOrigin) {
+                    return@runOnUiThread
+                }
+                ensureSecurityPermissionsAndStandby(forcePrompt = true)
+            }
+        }
+
+        @JavascriptInterface
+        fun hasCameraPermission(): Boolean {
+            return ContextCompat.checkSelfPermission(
+                this@MainActivity,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
         }
 
         @JavascriptInterface

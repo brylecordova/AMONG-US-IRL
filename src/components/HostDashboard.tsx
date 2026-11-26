@@ -39,6 +39,7 @@ import {
   PrintedEmergencyQrCard,
   PrintedPlayerBadgeCard,
   PrintedReactorMeltdownQrCard,
+  PrintedSecurityCamQrCard,
   PrintedTaskQrCard,
 } from './PrintedQrCards';
 import { QrCodeImg } from './QrCodeImg';
@@ -55,7 +56,14 @@ interface HostDashboardProps {
 }
 
 type HostTab = 'CONTROL' | 'PRINT' | 'RULES';
-type PrintFilter = 'ALL' | 'PLAYERS_ALL' | 'PLAYERS_JOINED' | 'TASKS' | 'REACTOR' | 'MEETING';
+type PrintFilter =
+  | 'ALL'
+  | 'PLAYERS_ALL'
+  | 'PLAYERS_JOINED'
+  | 'TASKS'
+  | 'REACTOR'
+  | 'SECURITY'
+  | 'MEETING';
 
 interface ApkStatusInfo {
   available: boolean;
@@ -437,6 +445,7 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
     printFilter === 'PLAYERS_JOINED';
   const showTasksSection = printFilter === 'ALL' || printFilter === 'TASKS';
   const showReactorSection = printFilter === 'ALL' || printFilter === 'REACTOR';
+  const showSecuritySection = printFilter === 'ALL' || printFilter === 'SECURITY';
   const showMeetingSection = printFilter === 'ALL' || printFilter === 'MEETING';
 
   const specialRoleSlotsTotal =
@@ -1712,7 +1721,7 @@ ${compiledCss}
             <div>
               <h2 className="font-display text-2xl font-bold text-white">Printable QR Studio</h2>
               <p className="text-xs text-slate-400">
-                Print player back badges (for kills, Sheriff/Investigator scans, and body reports), 16 Skeld task cards, the Reactor Meltdown Override QR, and Emergency Button.
+                Print player back badges (for kills, Sheriff/Investigator scans, and body reports), 16 Skeld task cards, Reactor Meltdown Override QR, Security Cams QR, and Emergency Button.
               </p>
             </div>
 
@@ -1724,6 +1733,7 @@ ${compiledCss}
                   ['PLAYERS_JOINED', 'Joined Players Only'],
                   ['TASKS', '16 Skeld Tasks'],
                   ['REACTOR', 'Reactor Override QR'],
+                  ['SECURITY', 'Security Cams QR'],
                   ['MEETING', 'Emergency Button'],
                 ] as Array<[PrintFilter, string]>
               ).map(([id, label]) => (
@@ -1850,11 +1860,30 @@ ${compiledCss}
               </section>
             )}
 
+            {/* Security Camera Terminal QR (5 FPS Live CCTV Monitor) */}
+            {showSecuritySection && (
+              <section
+                className={`space-y-4 print:space-y-2 ${
+                  showBadgesSection || showTasksSection || showReactorSection
+                    ? 'print:break-before-page'
+                    : ''
+                }`}
+              >
+                <h3 className="font-display text-xl print:text-base font-bold text-white print:text-slate-900">
+                  Security Room CCTV Monitor Station
+                </h3>
+                <PrintedSecurityCamQrCard
+                  sessionCode={state.sessionCode}
+                  hideManualCodes={Boolean(state.settings.hideManualCodes)}
+                />
+              </section>
+            )}
+
             {/* Emergency Meeting Cafeteria Button — max-w-sm on screen, crewmate-badge size on print */}
             {showMeetingSection && (
               <section
                 className={`space-y-4 print:space-y-2 ${
-                  showBadgesSection || showTasksSection || showReactorSection
+                  showBadgesSection || showTasksSection || showReactorSection || showSecuritySection
                     ? 'print:break-before-page'
                     : ''
                 }`}

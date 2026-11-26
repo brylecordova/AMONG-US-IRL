@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Trash2,
   UploadCloud,
+  Video,
   Wind,
   Zap,
 } from 'lucide-react';
@@ -24,10 +25,12 @@ import {
   buildMeetingQrPayload,
   buildPlayerQrPayload,
   buildReactorQrPayload,
+  buildSecurityCameraQrPayload,
   buildTaskQrPayload,
   PlayerColorDef,
   PlayerColorId,
   REACTOR_OVERRIDE_SHORT_CODE,
+  SECURITY_CAMERA_SHORT_CODE,
   SkeldTaskDef,
   SkeldTaskId,
 } from '../shared/skeldData';
@@ -680,6 +683,62 @@ export const PrintedReactorMeltdownQrCard: React.FC<{
             'repeating-linear-gradient(135deg, #E11D48 0px, #E11D48 12px, #0F172A 12px, #0F172A 24px)',
         }}
       />
+    </div>
+  );
+};
+
+export const PrintedSecurityCamQrCard: React.FC<{
+  sessionCode: string;
+  hideManualCodes: boolean;
+}> = ({ sessionCode, hideManualCodes }) => {
+  return (
+    <div className="print-card print-badge-card rounded-2xl border-[3px] border-cyan-600 bg-white overflow-hidden flex flex-col max-w-sm shadow-sm">
+      <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between gap-2 border-b-2 border-cyan-500">
+        <div className="flex items-center gap-2.5">
+          <span className="w-9 h-9 rounded-lg bg-cyan-500 text-slate-950 flex items-center justify-center shrink-0">
+            <Video className="w-5 h-5" />
+          </span>
+          <div className="text-left">
+            <div className="font-display text-2xl font-bold leading-none tracking-wide text-cyan-300">
+              SECURITY CAMS
+            </div>
+            <div className="text-[10px] font-mono font-bold text-slate-300 mt-0.5">
+              SECURITY ROOM · 5 FPS LIVE FEED
+            </div>
+          </div>
+        </div>
+        <span className="px-2 py-0.5 rounded bg-cyan-500/20 border border-cyan-400/50 text-[10px] font-mono font-bold text-cyan-200">
+          CCTV
+        </span>
+      </div>
+
+      <div className="p-5 flex-1 flex flex-col items-center text-center gap-3 text-slate-900 bg-cyan-50/40">
+        <p className="text-xs text-slate-700 font-medium leading-snug">
+          <strong>Alive Players:</strong> Scan with the Android APK to monitor another player&apos;s rear camera live (1 feed at a time). Disabled during Signal Jam.
+        </p>
+
+        <div className="p-2 rounded-xl border-[3px] border-cyan-600 bg-white shadow-xs">
+          <div className="w-[180px] h-[180px] print:w-[228px] print:h-[228px]">
+            <QrCodeImg
+              value={buildSecurityCameraQrPayload(sessionCode)}
+              renderSize={400}
+              responsive
+              darkColor="#083344"
+              alt="Security Cameras Station QR"
+              className="!p-0.5"
+            />
+          </div>
+        </div>
+
+        <div className="w-full flex items-center justify-between text-xs font-mono font-bold text-slate-700 pt-1">
+          <span>SECURITY · {sessionCode}</span>
+          {!hideManualCodes && (
+            <span className="px-2 py-0.5 rounded bg-cyan-700 text-white">
+              CODE: {SECURITY_CAMERA_SHORT_CODE}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

@@ -214,6 +214,7 @@ export const PLAYER_COLORS: PlayerColorDef[] = [
 ];
 
 export const REACTOR_OVERRIDE_SHORT_CODE = 'MELT';
+export const SECURITY_CAMERA_SHORT_CODE = 'CAMS';
 
 export const SKELD_ROOMS = [
   'Cafeteria',
@@ -495,6 +496,7 @@ export interface HostGameState {
 export type ParsedQrAction =
   | { kind: 'TASK'; sessionCode?: string; task: SkeldTaskDef }
   | { kind: 'REACTOR_OVERRIDE'; sessionCode?: string }
+  | { kind: 'SECURITY_CAM'; sessionCode?: string }
   | { kind: 'PLAYER'; sessionCode?: string; color: PlayerColorDef }
   | { kind: 'MEETING'; sessionCode?: string }
   | { kind: 'JOIN'; sessionCode: string; serverOrigin?: string }
@@ -506,6 +508,10 @@ export function buildTaskQrPayload(sessionCode: string, taskId: SkeldTaskId): st
 
 export function buildReactorQrPayload(sessionCode: string): string {
   return `SKELD|REACTOR|${sessionCode.toUpperCase()}|OVERRIDE`;
+}
+
+export function buildSecurityCameraQrPayload(sessionCode: string): string {
+  return `SKELD|SECURITY|${sessionCode.toUpperCase()}|CAMS`;
 }
 
 export function buildPlayerQrPayload(sessionCode: string, colorId: PlayerColorId): string {
@@ -589,6 +595,9 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     if (kind === 'REACTOR') {
       return { kind: 'REACTOR_OVERRIDE', sessionCode };
     }
+    if (kind === 'SECURITY') {
+      return { kind: 'SECURITY_CAM', sessionCode };
+    }
     if (kind === 'PLAYER' && target) {
       const color = PLAYER_COLORS.find((c) => c.id === target);
       if (color) return { kind: 'PLAYER', sessionCode, color };
@@ -598,7 +607,7 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
     }
   }
 
-  // Check manual short codes (e.g., WIR1, MELT, RED, EMRG)
+  // Check manual short codes (e.g., WIR1, MELT, CAMS, RED, EMRG)
   const upper = trimmed.toUpperCase().replace(/[^A-Z0-9-]/g, '');
   if (upper === 'EMRG' || upper === 'MEET' || upper === 'CAFETERIA') {
     return { kind: 'MEETING' };
@@ -606,6 +615,15 @@ export function parseQrOrManualInput(rawInput: string): ParsedQrAction | null {
 
   if (upper === REACTOR_OVERRIDE_SHORT_CODE || upper === 'MELTDOWN' || upper === 'REACTOROVERRIDE') {
     return { kind: 'REACTOR_OVERRIDE' };
+  }
+
+  if (
+    upper === SECURITY_CAMERA_SHORT_CODE ||
+    upper === 'SEC1' ||
+    upper === 'SECCAM' ||
+    upper === 'SECURITY'
+  ) {
+    return { kind: 'SECURITY_CAM' };
   }
 
   const taskByShort = SKELD_TASKS.find(

@@ -146,7 +146,35 @@ export default function App() {
     payload?: Record<string, unknown>;
   } | null>(null);
 
+  // Security Camera live CCTV state
+  const [securityWatcherCount, setSecurityWatcherCount] = useState(0);
+  const [securityLatestFrame, setSecurityLatestFrame] = useState<{
+    targetPlayerId: string;
+    imageBase64: string;
+    ts: number;
+  } | null>(null);
+  const [securityTargetStatus, setSecurityTargetStatus] = useState<{
+    targetPlayerId: string;
+    busy: boolean;
+    offline: boolean;
+    lostReason: string | null;
+  } | null>(null);
+  const [securityJammed, setSecurityJammed] = useState(false);
+  const [securityForceClosedSeq, setSecurityForceClosedSeq] = useState(0);
+  const [securityErrorEvent, setSecurityErrorEvent] = useState<{
+    seq: number;
+    message: string;
+  } | null>(null);
+  const [playerScannerOpen, setPlayerScannerOpen] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
+
+  const sendWsMessage = useCallback((msg: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }, []);
 
   // Keep local + Android native storage synced whenever playerState has valid codes
   useEffect(() => {
@@ -428,10 +456,79 @@ export default function App() {
             } else if (msg.type === 'mission:started') {
               setMissionStartedTrigger((n) => n + 1);
               setHostEvent({ seq: Date.now() + Math.random(), type: msg.type, payload: payloadRec });
+            } else if (msg.type === 'security:capture') {
+              const active = Boolean(payloadRec?.active);
+              const count = typeof payloadRec?.watcherCount === 'number' ? payloadRec.watcherCount : 0;
+              setSecurityWatcherCount(active ? Math.max(1, count) : 0);
+            } else if (msg.type === 'security:frame') {
+              if (
+                typeof payloadRec?.targetPlayerId === 'string' &&
+                typeof payloadRec?.imageBase64 === 'string'
+              ) {
+                const targetPlayerId = payloadRec.targetPlayerId;
+                setSecurityLatestFrame({
+                  targetPlayerId,
+                  imageBase64: payloadRec.imageBase64,
+                  ts: typeof payloadRec.ts === 'number' ? payloadRec.ts : Date.now(),
+                });
+                setSecurityTargetStatus((prev) =>
+                  prev && prev.targetPlayerId === targetPlayerId
+                    ? { ...prev, busy: false, offline: false, lostReason: null }
+                    : prev,
+                );
+              }
+            } else if (msg.type === 'security:target_busy') {
+              if (typeof payloadRec?.targetPlayerId === 'string') {
+                const targetPlayerId = payloadRec.targetPlayerId;
+                const busy = Boolean(payloadRec.busy);
+                setSecurityTargetStatus((prev) => ({
+                  targetPlayerId,
+                  busy,
+                  offline: prev?.targetPlayerId === targetPlayerId ? prev.offline : false,
+                  lostReason: prev?.targetPlayerId === targetPlayerId ? prev.lostReason : null,
+                }));
+              }
+            } else if (msg.type === 'security:target_offline') {
+              if (typeof payloadRec?.targetPlayerId === 'string') {
+                const targetPlayerId = payloadRec.targetPlayerId;
+                setSecurityTargetStatus((prev) => ({
+                  targetPlayerId,
+                  busy: prev?.targetPlayerId === targetPlayerId ? prev.busy : false,
+                  offline: true,
+                  lostReason: prev?.targetPlayerId === targetPlayerId ? prev.lostReason : null,
+                }));
+              }
+            } else if (msg.type === 'security:target_lost') {
+              if (typeof payloadRec?.targetPlayerId === 'string') {
+                const targetPlayerId = payloadRec.targetPlayerId;
+                setSecurityTargetStatus({
+                  targetPlayerId,
+                  busy: false,
+                  offline: false,
+                  lostReason: typeof payloadRec.reason === 'string' ? payloadRec.reason : 'DECEASED',
+                });
+              }
+            } else if (msg.type === 'security:jammed') {
+              setSecurityJammed(true);
+              setSecurityWatcherCount(0);
+            } else if (msg.type === 'security:ready') {
+              setSecurityJammed(false);
+            } else if (msg.type === 'security:ended') {
+              setSecurityWatcherCount(0);
+              setSecurityForceClosedSeq((n) => n + 1);
+            } else if (msg.type === 'security:error') {
+              setSecurityErrorEvent({
+                seq: Date.now() + Math.random(),
+                message:
+                  typeof payloadRec?.error === 'string'
+                    ? payloadRec.error
+                    : 'Security monitor error.',
+              });
             } else if (msg.type === 'player:removed') {
               closedManually = true;
               haptics.notify('warning');
               clearSavedPlayerSession();
+              setSecurityWatcherCount(0);
               setPlayerToken(null);
               setPlayerState(null);
               setScreen('TITLE');
@@ -442,6 +539,7 @@ export default function App() {
         };
 
         ws.onclose = () => {
+          setSecurityWatcherCount(0);
           if (!closedManually) {
             reconnectTimer = setTimeout(openSocket, 1500);
           }
@@ -479,6 +577,137 @@ export default function App() {
     wsReconnectNonce,
     connectWebSocket,
   ]);
+
+  const isMatchAlivePlayer =
+    screen === 'PLAYER' && playerState?.phase === 'PLAYING' && Boolean(playerState.self?.alive);
+  const isSignalJamActive =
+    screen === 'PLAYER' &&
+    playerState?.phase === 'PLAYING' &&
+    playerState?.activeSabotage?.kind === 'SIGNAL_JAM';
+
+  // Keep Android APK foreground standby service & Security states synchronized with match phase
+  useEffect(() => {
+    setSecurityJammed(Boolean(isSignalJamActive));
+    if (!isMatchAlivePlayer || isSignalJamActive) {
+      setSecurityWatcherCount(0);
+    }
+    if (!isMatchAlivePlayer) {
+      setSecurityLatestFrame(null);
+      setSecurityTargetStatus(null);
+    }
+    window.AmongUsAndroid?.setMatchActive?.(isMatchAlivePlayer);
+  }, [isMatchAlivePlayer, isSignalJamActive]);
+
+  useEffect(() => {
+    return () => {
+      window.AmongUsAndroid?.setSecurityCaptureActive?.(false);
+      window.AmongUsAndroid?.setMatchActive?.(false);
+    };
+  }, []);
+
+  const shouldCaptureSecurityCam =
+    isMatchAlivePlayer && !isSignalJamActive && securityWatcherCount > 0;
+
+  // Wire native Android APK 5 FPS CameraX service & frame bridge
+  useEffect(() => {
+    window.__onAndroidSecurityFrame = (base64Jpeg: string) => {
+      sendWsMessage({ type: 'security:frame', imageBase64: base64Jpeg });
+    };
+    window.__onAndroidScannerBusyChanged = (busy: boolean) => {
+      sendWsMessage({ type: 'security:scanner_busy', busy });
+    };
+
+    window.AmongUsAndroid?.setSecurityCaptureActive?.(shouldCaptureSecurityCam);
+
+    return () => {
+      window.AmongUsAndroid?.setSecurityCaptureActive?.(false);
+      window.__onAndroidSecurityFrame = undefined;
+      window.__onAndroidScannerBusyChanged = undefined;
+    };
+  }, [shouldCaptureSecurityCam, sendWsMessage]);
+
+  // Browser HTTPS / localhost fallback when testing outside the Android APK
+  useEffect(() => {
+    const hasNativeBridge = typeof window.AmongUsAndroid?.setSecurityCaptureActive === 'function';
+    if (hasNativeBridge) return;
+
+    if (shouldCaptureSecurityCam && playerScannerOpen) {
+      sendWsMessage({ type: 'security:scanner_busy', busy: true });
+      return () => {
+        sendWsMessage({ type: 'security:scanner_busy', busy: false });
+      };
+    }
+
+    if (!shouldCaptureSecurityCam || playerScannerOpen) return;
+
+    const isSecureBrowser =
+      window.isSecureContext ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1';
+    if (!isSecureBrowser || !navigator.mediaDevices?.getUserMedia) return;
+
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    let intervalId: number | null = null;
+
+    const startFallbackCapture = async () => {
+      try {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.muted = true;
+        video.setAttribute('playsinline', 'true');
+        await video.play().catch(() => {});
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        intervalId = window.setInterval(() => {
+          if (cancelled || !ctx || video.readyState < video.HAVE_CURRENT_DATA) return;
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (!vw || !vh) return;
+          const scale = Math.min(1, 320 / Math.max(vw, vh));
+          canvas.width = Math.max(1, Math.round(vw * scale));
+          canvas.height = Math.max(1, Math.round(vh * scale));
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.52);
+          const commaIdx = dataUrl.indexOf(',');
+          if (commaIdx !== -1) {
+            sendWsMessage({
+              type: 'security:frame',
+              imageBase64: dataUrl.slice(commaIdx + 1),
+            });
+          }
+        }, 200);
+      } catch {
+        // Ignore browser camera permission denials during fallback
+      }
+    };
+
+    void startFallbackCapture();
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) window.clearInterval(intervalId);
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [shouldCaptureSecurityCam, playerScannerOpen, sendWsMessage]);
 
   // Immediately refresh player state & reconnect WebSocket when returning from another app
   useEffect(() => {
@@ -719,9 +948,26 @@ export default function App() {
         missionStartedTrigger={missionStartedTrigger}
         shieldBlockedEvent={shieldBlockedEvent}
         sheriffActionEvent={sheriffActionEvent}
+        securityWatcherCount={securityWatcherCount}
+        securityLatestFrame={securityLatestFrame}
+        securityTargetStatus={securityTargetStatus}
+        securityJammed={securityJammed}
+        securityForceClosedSeq={securityForceClosedSeq}
+        securityErrorEvent={securityErrorEvent}
+        onSendWsMessage={sendWsMessage}
+        onScannerOpenChange={setPlayerScannerOpen}
+        onClearSecurityFeedState={() => {
+          setSecurityLatestFrame(null);
+          setSecurityTargetStatus(null);
+        }}
         onUpdateState={setPlayerState}
         onLeaveSession={() => {
           clearSavedPlayerSession();
+          setSecurityWatcherCount(0);
+          setSecurityLatestFrame(null);
+          setSecurityTargetStatus(null);
+          window.AmongUsAndroid?.setSecurityCaptureActive?.(false);
+          window.AmongUsAndroid?.setMatchActive?.(false);
           setPlayerToken(null);
           setPlayerState(null);
           setScreen('TITLE');

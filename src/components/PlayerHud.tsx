@@ -18,6 +18,7 @@ import {
   Terminal,
   Trophy,
   Unlock,
+  Video,
   Volume2,
   VolumeX,
   X,
@@ -39,6 +40,7 @@ import { CrewmateAvatar } from './CrewmateAvatar';
 import { SkeldTaskIconBadge } from './PrintedQrCards';
 import { QrScannerModal, QrScanValidationResult } from './QrScannerModal';
 import { RoleSplashModal } from './RoleSplashModal';
+import { SecurityMonitorModal } from './SecurityMonitorModal';
 import { SkeldTaskModal } from './tasks/SkeldTaskModal';
 import { haptics } from '../utils/haptics';
 import { soundEngine } from '../utils/sound';
@@ -62,6 +64,20 @@ interface PlayerHudProps {
     targetName?: string;
     sheriffName?: string;
   } | null;
+  securityWatcherCount: number;
+  securityLatestFrame: { targetPlayerId: string; imageBase64: string; ts: number } | null;
+  securityTargetStatus: {
+    targetPlayerId: string;
+    busy: boolean;
+    offline: boolean;
+    lostReason: string | null;
+  } | null;
+  securityJammed: boolean;
+  securityForceClosedSeq: number;
+  securityErrorEvent?: { seq: number; message: string } | null;
+  onSendWsMessage: (msg: Record<string, unknown>) => void;
+  onScannerOpenChange?: (open: boolean) => void;
+  onClearSecurityFeedState: () => void;
   onUpdateState: (next: ClientGameState) => void;
   onLeaveSession: () => void;
 }
@@ -83,6 +99,15 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   missionStartedTrigger,
   shieldBlockedEvent,
   sheriffActionEvent,
+  securityWatcherCount,
+  securityLatestFrame,
+  securityTargetStatus,
+  securityJammed,
+  securityForceClosedSeq,
+  securityErrorEvent,
+  onSendWsMessage,
+  onScannerOpenChange,
+  onClearSecurityFeedState,
   onUpdateState,
   onLeaveSession,
 }) => {
@@ -102,6 +127,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
   const [showReactorHoldModal, setShowReactorHoldModal] = useState(false);
   const [showReactorArmedModal, setShowReactorArmedModal] = useState(false);
   const [holdingReactor, setHoldingReactor] = useState(false);
+  const [showSecurityMonitor, setShowSecurityMonitor] = useState(false);
+  const [selectedSecurityTargetId, setSelectedSecurityTargetId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [muted, setMuted] = useState(soundEngine.isMuted());
   const [nowMs, setNowMs] = useState(Date.now());
@@ -251,6 +278,11 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     state.activeSabotage?.dualHoldStartedAt,
   ]);
 
+  // Report scanner open/closed state for browser fallback camera coordination
+  useEffect(() => {
+    onScannerOpenChange?.(Boolean(scannerMode));
+  }, [scannerMode, onScannerOpenChange]);
+
   // Show "YOU HAVE BEEN KILLED" modal immediately when killed
   useEffect(() => {
     if (killedAlertTrigger > 0) {
@@ -260,6 +292,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setScannerMode(null);
       setDeadBodyFound(null);
       setShowReactorHoldModal(false);
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
       setShowKilledModal(true);
     }
   }, [killedAlertTrigger]);
@@ -273,6 +307,8 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setScannerMode(null);
       setDeadBodyFound(null);
       setShowReactorHoldModal(false);
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
     }
   }, [meetingAlertTrigger]);
 
@@ -349,12 +385,14 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
       setShowRoleSplash(false);
     }
 
-    if (state.phase !== 'PLAYING') {
+    if (state.phase !== 'PLAYING' || !state.self.alive) {
       setShowTerminal(false);
       setTerminalUnlocked(false);
       setDeadBodyFound(null);
       setShowReactorHoldModal(false);
       setShowReactorArmedModal(false);
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
     }
 
     if (
@@ -367,7 +405,21 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
     }
 
     prevPhaseRef.current = state.phase;
-  }, [missionStartedTrigger, state.phase]);
+  }, [missionStartedTrigger, state.phase, state.self.alive]);
+
+  useEffect(() => {
+    if (securityForceClosedSeq > 0) {
+      setShowSecurityMonitor(false);
+      setSelectedSecurityTargetId(null);
+    }
+  }, [securityForceClosedSeq]);
+
+  useEffect(() => {
+    if (securityErrorEvent?.message) {
+      haptics.notify('warning');
+      setToastMsg(securityErrorEvent.message);
+    }
+  }, [securityErrorEvent]);
 
   const isImpostorTeam =
     state.self.secretRole === 'IMPOSTOR' || state.self.secretRole === 'SHAPESHIFTER';
@@ -542,6 +594,28 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
           error: err instanceof Error ? err.message : 'Reactor Override rejected.',
         };
       }
+    }
+
+    if (parsed.kind === 'SECURITY_CAM') {
+      if (!state.self.alive) {
+        return {
+          valid: false,
+          error: 'Ghosts cannot access live Security Camera monitors.',
+        };
+      }
+      if (state.activeSabotage?.kind === 'SIGNAL_JAM' && signalJamLeftSec > 0) {
+        return {
+          valid: false,
+          error: `Comms Signal Jam active! Security cameras are offline for ${signalJamLeftSec}s.`,
+        };
+      }
+      setScannerMode(null);
+      onClearSecurityFeedState();
+      setSelectedSecurityTargetId(null);
+      setShowSecurityMonitor(true);
+      onSendWsMessage({ type: 'security:open' });
+      haptics.impact('medium');
+      return { valid: true };
     }
 
     if (parsed.kind === 'MEETING') {
@@ -1160,6 +1234,38 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 )}
               </AnimatePresence>
 
+              {/* Security Camera Active ("Being Watched") Quirk Indicator */}
+              <AnimatePresence>
+                {securityWatcherCount > 0 &&
+                  state.self.alive &&
+                  state.activeSabotage?.kind !== 'SIGNAL_JAM' && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      className="rounded-2xl p-3.5 border-2 border-red-500/80 bg-red-950/40 shadow-[0_0_24px_rgba(239,68,68,0.28)] flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-red-500/20 border border-red-400/60 flex items-center justify-center text-red-300 shrink-0">
+                          <Video className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-display text-lg font-bold text-red-200 leading-tight flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                            <span>SECURITY CAM ACTIVE</span>
+                          </div>
+                          <div className="text-[11px] text-red-100/85">
+                            Another player is viewing your rear camera feed live
+                          </div>
+                        </div>
+                      </div>
+                      <span className="font-mono text-[11px] font-bold text-white bg-red-600 px-2 py-1 rounded-lg shrink-0">
+                        REC
+                      </span>
+                    </motion.div>
+                  )}
+              </AnimatePresence>
+
               {/* Neutral Crewmate Station Brief */}
               <div className="rounded-2xl p-4 border bg-[#151C28] border-white/10">
                 <div className="flex items-center justify-between gap-2">
@@ -1177,7 +1283,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                 </div>
 
                 <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
-                  Scan Skeld Task QR codes around the area to complete assignments, scan fallen crewmates to report bodies, or scan Cafeteria EMRG for a meeting.
+                  Scan Skeld Task QR codes to complete assignments, scan Security Cams to check player feeds, scan fallen crewmates to report bodies, or scan Cafeteria EMRG.
                 </p>
               </div>
 
@@ -1225,7 +1331,7 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
                           {state.activeSabotage.kind === 'BLACKOUT' &&
                             `All regular tasks are disabled. Anyone alive can scan Fix Wiring${state.settings.hideManualCodes ? '' : ' (WIR1)'} in Electrical to restore power!`}
                           {state.activeSabotage.kind === 'SIGNAL_JAM' &&
-                            `Emergency Meeting button is jammed for ${signalJamLeftSec}s. Body reports still work.`}
+                            `Emergency Meeting button & Security Cameras are jammed for ${signalJamLeftSec}s. Body reports still work.`}
                           {state.activeSabotage.kind === 'REACTOR' &&
                             `2 alive players must scan the Reactor Override QR${state.settings.hideManualCodes ? '' : ` (${REACTOR_OVERRIDE_SHORT_CODE})`} and hold the button together for 5s! (${(state.activeSabotage.reactorHolders || []).length}/2 holding)`}
                         </p>
@@ -2452,13 +2558,57 @@ export const PlayerHud: React.FC<PlayerHudProps> = ({
             title="Skeld QR Scanner"
             subtitle={
               state.settings.hideManualCodes
-                ? 'Scan a physical Task QR, Player back badge, or Cafeteria button.'
-                : 'Scan any Task QR, Player back badge, or Cafeteria EMRG button.'
+                ? 'Scan a Task QR, Security Cams, Player badge, or Cafeteria button.'
+                : 'Scan a Task QR, Security CAMS, Player badge, or Cafeteria EMRG.'
             }
             accentColor="emerald"
             hideManualCodes={Boolean(state.settings.hideManualCodes)}
             onDetected={handleQrDetected}
             onClose={() => setScannerMode(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* SECURITY ROOM 5 FPS CCTV MONITOR MODAL */}
+      <AnimatePresence>
+        {showSecurityMonitor && state.phase === 'PLAYING' && state.self.alive && (
+          <SecurityMonitorModal
+            players={state.players}
+            selfPlayerId={state.self.playerId}
+            jammed={securityJammed || state.activeSabotage?.kind === 'SIGNAL_JAM'}
+            selectedTargetId={selectedSecurityTargetId}
+            latestFrame={securityLatestFrame}
+            targetBusy={
+              Boolean(
+                selectedSecurityTargetId &&
+                  securityTargetStatus?.targetPlayerId === selectedSecurityTargetId &&
+                  securityTargetStatus.busy,
+              )
+            }
+            targetOffline={
+              Boolean(
+                selectedSecurityTargetId &&
+                  securityTargetStatus?.targetPlayerId === selectedSecurityTargetId &&
+                  securityTargetStatus.offline,
+              )
+            }
+            targetLostReason={
+              selectedSecurityTargetId &&
+              securityTargetStatus?.targetPlayerId === selectedSecurityTargetId
+                ? securityTargetStatus.lostReason
+                : null
+            }
+            onSelectTarget={(targetPlayerId) => {
+              onClearSecurityFeedState();
+              setSelectedSecurityTargetId(targetPlayerId);
+              onSendWsMessage({ type: 'security:select', targetPlayerId });
+            }}
+            onClose={() => {
+              setShowSecurityMonitor(false);
+              setSelectedSecurityTargetId(null);
+              onClearSecurityFeedState();
+              onSendWsMessage({ type: 'security:close' });
+            }}
           />
         )}
       </AnimatePresence>

@@ -16,8 +16,14 @@ declare global {
       savePlayerSession?: (sessionCode: string, rejoinCode: string) => void;
       clearPlayerSession?: () => void;
       getSavedPlayerSessionJson?: () => string;
+      setMatchActive?: (active: boolean) => void;
+      setSecurityCaptureActive?: (active: boolean) => void;
+      requestCameraPermission?: () => void;
+      hasCameraPermission?: () => boolean;
     };
     __onAndroidQrScanned?: (rawText: string) => void;
+    __onAndroidSecurityFrame?: (base64Jpeg: string) => void;
+    __onAndroidScannerBusyChanged?: (busy: boolean) => void;
   }
 }
 

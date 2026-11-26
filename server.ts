@@ -199,6 +199,121 @@ interface WsClientMeta {
 }
 
 const clientsBySession = new Map<string, Set<WsClientMeta>>();
+// sessionCode -> Map<watcherPlayerId, targetPlayerId>
+const securityWatchersBySession = new Map<string, Map<string, string>>();
+
+function sendToPlayerSockets(sessionCode: string, playerId: string, data: unknown) {
+  const group = clientsBySession.get(sessionCode);
+  if (!group) return;
+  const serialized = JSON.stringify(data);
+  for (const client of group) {
+    if (
+      client.ws.readyState === WebSocket.OPEN &&
+      client.role === 'PLAYER' &&
+      client.playerId === playerId
+    ) {
+      client.ws.send(serialized);
+    }
+  }
+}
+
+function getTargetWatcherIds(sessionCode: string, targetPlayerId: string): string[] {
+  const watcherMap = securityWatchersBySession.get(sessionCode);
+  if (!watcherMap) return [];
+  const watchers: string[] = [];
+  for (const [watcherId, targetId] of watcherMap.entries()) {
+    if (targetId === targetPlayerId) {
+      watchers.push(watcherId);
+    }
+  }
+  return watchers;
+}
+
+function syncTargetCaptureState(sessionCode: string, targetPlayerId: string) {
+  const watcherCount = getTargetWatcherIds(sessionCode, targetPlayerId).length;
+  sendToPlayerSockets(sessionCode, targetPlayerId, {
+    type: 'security:capture',
+    payload: {
+      active: watcherCount > 0,
+      watcherCount,
+    },
+  });
+}
+
+function clearWatcher(sessionCode: string, watcherPlayerId: string) {
+  const watcherMap = securityWatchersBySession.get(sessionCode);
+  if (!watcherMap) return;
+  const prevTargetId = watcherMap.get(watcherPlayerId);
+  if (!prevTargetId) return;
+  watcherMap.delete(watcherPlayerId);
+  if (watcherMap.size === 0) {
+    securityWatchersBySession.delete(sessionCode);
+  }
+  syncTargetCaptureState(sessionCode, prevTargetId);
+}
+
+function reconcileSecurityStateWithSession(
+  session: NonNullable<Awaited<ReturnType<typeof getSession>>>,
+) {
+  const watcherMap = securityWatchersBySession.get(session.sessionCode);
+  if (!watcherMap || watcherMap.size === 0) return;
+
+  if (session.phase !== 'PLAYING' || session.activeSabotage?.kind === 'SIGNAL_JAM') {
+    const affectedTargets = new Set<string>();
+    const affectedWatchers = new Set<string>();
+    for (const [watcherId, targetId] of watcherMap.entries()) {
+      affectedWatchers.add(watcherId);
+      affectedTargets.add(targetId);
+    }
+    securityWatchersBySession.delete(session.sessionCode);
+
+    for (const targetId of affectedTargets) {
+      sendToPlayerSockets(session.sessionCode, targetId, {
+        type: 'security:capture',
+        payload: { active: false, watcherCount: 0 },
+      });
+    }
+    const isJammed = session.phase === 'PLAYING' && session.activeSabotage?.kind === 'SIGNAL_JAM';
+    for (const watcherId of affectedWatchers) {
+      sendToPlayerSockets(session.sessionCode, watcherId, {
+        type: isJammed ? 'security:jammed' : 'security:ended',
+        payload: {
+          message: isJammed
+            ? 'Comms Signal Jam active — Security cameras offline!'
+            : 'Security monitor disconnected.',
+        },
+      });
+    }
+    return;
+  }
+
+  const affectedTargets = new Set<string>();
+  for (const [watcherId, targetId] of Array.from(watcherMap.entries())) {
+    const watcher = session.players.find((p) => p.playerId === watcherId);
+    const target = session.players.find((p) => p.playerId === targetId);
+    if (!watcher || !watcher.alive || !target || !target.alive) {
+      watcherMap.delete(watcherId);
+      affectedTargets.add(targetId);
+      if (watcher && !watcher.alive) {
+        sendToPlayerSockets(session.sessionCode, watcherId, {
+          type: 'security:ended',
+          payload: { message: 'Security monitor closed — only alive players can view feeds.' },
+        });
+      } else if (watcher && (!target || !target.alive)) {
+        sendToPlayerSockets(session.sessionCode, watcherId, {
+          type: 'security:target_lost',
+          payload: { targetPlayerId: targetId, reason: 'DECEASED' },
+        });
+      }
+    }
+  }
+  if (watcherMap.size === 0) {
+    securityWatchersBySession.delete(session.sessionCode);
+  }
+  for (const targetId of affectedTargets) {
+    syncTargetCaptureState(session.sessionCode, targetId);
+  }
+}
 
 function buildPublicSummary(session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
   return {
@@ -221,6 +336,7 @@ async function broadcastSessionState(
 ) {
   const session = await getSession(sessionCode);
   if (!session) return;
+  reconcileSecurityStateWithSession(session);
   const group = clientsBySession.get(sessionCode);
   if (!group) return;
 
@@ -999,6 +1115,9 @@ async function main() {
           sessionCode?: string;
           role?: string;
           token?: string;
+          targetPlayerId?: string;
+          imageBase64?: string;
+          busy?: boolean;
         };
 
         if (msg.type === 'subscribe') {
@@ -1061,6 +1180,205 @@ async function main() {
             );
           } else {
             await broadcastSessionState(code);
+            if (playerId) {
+              const activeWatchers = getTargetWatcherIds(code, playerId).length;
+              ws.send(
+                JSON.stringify({
+                  type: 'security:capture',
+                  payload: {
+                    active:
+                      session.phase === 'PLAYING' &&
+                      session.activeSabotage?.kind !== 'SIGNAL_JAM' &&
+                      activeWatchers > 0,
+                    watcherCount: activeWatchers,
+                  },
+                }),
+              );
+            }
+          }
+          return;
+        }
+
+        if (!clientMeta || clientMeta.role !== 'PLAYER' || !clientMeta.playerId) {
+          return;
+        }
+
+        const { sessionCode, playerId } = clientMeta;
+
+        if (msg.type === 'security:open') {
+          const session = await getSession(sessionCode);
+          if (!session || session.phase !== 'PLAYING') {
+            ws.send(
+              JSON.stringify({
+                type: 'security:error',
+                payload: { error: 'Security monitors are only active during gameplay.' },
+              }),
+            );
+            return;
+          }
+          const watcher = session.players.find((p) => p.playerId === playerId);
+          if (!watcher || !watcher.alive) {
+            ws.send(
+              JSON.stringify({
+                type: 'security:error',
+                payload: { error: 'Only alive crewmates can operate Security Monitors.' },
+              }),
+            );
+            return;
+          }
+          if (session.activeSabotage?.kind === 'SIGNAL_JAM') {
+            clearWatcher(sessionCode, playerId);
+            ws.send(
+              JSON.stringify({
+                type: 'security:jammed',
+                payload: { message: 'Comms Signal Jam active — Security cameras offline!' },
+              }),
+            );
+            return;
+          }
+          ws.send(JSON.stringify({ type: 'security:ready', payload: { ok: true } }));
+          return;
+        }
+
+        if (msg.type === 'security:select') {
+          const targetId = typeof msg.targetPlayerId === 'string' ? msg.targetPlayerId.trim() : '';
+          const session = await getSession(sessionCode);
+          if (!session || session.phase !== 'PLAYING') {
+            clearWatcher(sessionCode, playerId);
+            ws.send(
+              JSON.stringify({
+                type: 'security:ended',
+                payload: { message: 'Security session ended.' },
+              }),
+            );
+            return;
+          }
+          if (session.activeSabotage?.kind === 'SIGNAL_JAM') {
+            clearWatcher(sessionCode, playerId);
+            ws.send(
+              JSON.stringify({
+                type: 'security:jammed',
+                payload: { message: 'Comms Signal Jam active — Security cameras offline!' },
+              }),
+            );
+            return;
+          }
+          const watcher = session.players.find((p) => p.playerId === playerId);
+          if (!watcher || !watcher.alive) {
+            clearWatcher(sessionCode, playerId);
+            ws.send(
+              JSON.stringify({
+                type: 'security:ended',
+                payload: { message: 'Only alive crewmates can view security feeds.' },
+              }),
+            );
+            return;
+          }
+          if (!targetId) {
+            clearWatcher(sessionCode, playerId);
+            return;
+          }
+          const target = session.players.find((p) => p.playerId === targetId);
+          if (!target || target.playerId === playerId) {
+            ws.send(
+              JSON.stringify({
+                type: 'security:error',
+                payload: { error: 'Select another crewmate to view their rear camera.' },
+              }),
+            );
+            return;
+          }
+          if (!target.alive) {
+            clearWatcher(sessionCode, playerId);
+            ws.send(
+              JSON.stringify({
+                type: 'security:target_lost',
+                payload: { targetPlayerId: target.playerId, reason: 'DECEASED' },
+              }),
+            );
+            return;
+          }
+
+          let watcherMap = securityWatchersBySession.get(sessionCode);
+          if (!watcherMap) {
+            watcherMap = new Map<string, string>();
+            securityWatchersBySession.set(sessionCode, watcherMap);
+          }
+          const prevTargetId = watcherMap.get(playerId);
+          watcherMap.set(playerId, target.playerId);
+
+          if (prevTargetId && prevTargetId !== target.playerId) {
+            syncTargetCaptureState(sessionCode, prevTargetId);
+          }
+          syncTargetCaptureState(sessionCode, target.playerId);
+
+          const targetOnline = Array.from(clientsBySession.get(sessionCode) || []).some(
+            (c) =>
+              c.role === 'PLAYER' &&
+              c.playerId === target.playerId &&
+              c.ws.readyState === WebSocket.OPEN,
+          );
+          if (!targetOnline) {
+            ws.send(
+              JSON.stringify({
+                type: 'security:target_offline',
+                payload: { targetPlayerId: target.playerId },
+              }),
+            );
+          }
+          return;
+        }
+
+        if (msg.type === 'security:close') {
+          clearWatcher(sessionCode, playerId);
+          return;
+        }
+
+        if (msg.type === 'security:frame') {
+          const b64 = typeof msg.imageBase64 === 'string' ? msg.imageBase64 : '';
+          if (b64.length < 16 || b64.length > 180_000 || !/^[A-Za-z0-9+/=]+$/.test(b64)) {
+            return;
+          }
+          const watcherIds = getTargetWatcherIds(sessionCode, playerId);
+          if (watcherIds.length === 0) return;
+
+          const session = await getSession(sessionCode);
+          if (
+            !session ||
+            session.phase !== 'PLAYING' ||
+            session.activeSabotage?.kind === 'SIGNAL_JAM'
+          ) {
+            return;
+          }
+          const sender = session.players.find((p) => p.playerId === playerId);
+          if (!sender || !sender.alive) return;
+
+          const framePacket = {
+            type: 'security:frame',
+            payload: {
+              targetPlayerId: playerId,
+              imageBase64: b64,
+              ts: Date.now(),
+            },
+          };
+          for (const watcherId of watcherIds) {
+            sendToPlayerSockets(sessionCode, watcherId, framePacket);
+          }
+          return;
+        }
+
+        if (msg.type === 'security:scanner_busy') {
+          const watcherIds = getTargetWatcherIds(sessionCode, playerId);
+          if (watcherIds.length === 0) return;
+          const busyPacket = {
+            type: 'security:target_busy',
+            payload: {
+              targetPlayerId: playerId,
+              busy: Boolean(msg.busy),
+            },
+          };
+          for (const watcherId of watcherIds) {
+            sendToPlayerSockets(sessionCode, watcherId, busyPacket);
           }
         }
       } catch {
@@ -1079,11 +1397,22 @@ async function main() {
       }
       if (clientMeta.role === 'PLAYER' && clientMeta.playerId) {
         const session = await getSession(clientMeta.sessionCode);
-        if (session) {
-          const stillOnline = Array.from(clientsBySession.get(clientMeta.sessionCode) || []).some(
-            (c) => c.playerId === clientMeta!.playerId,
+        const stillOnline = Array.from(clientsBySession.get(clientMeta.sessionCode) || []).some(
+          (c) => c.playerId === clientMeta!.playerId,
+        );
+        if (!stillOnline) {
+          clearWatcher(clientMeta.sessionCode, clientMeta.playerId);
+          const watchersOfDisconnected = getTargetWatcherIds(
+            clientMeta.sessionCode,
+            clientMeta.playerId,
           );
-          if (!stillOnline) {
+          for (const watcherId of watchersOfDisconnected) {
+            sendToPlayerSockets(clientMeta.sessionCode, watcherId, {
+              type: 'security:target_offline',
+              payload: { targetPlayerId: clientMeta.playerId },
+            });
+          }
+          if (session) {
             const p = session.players.find((pl) => pl.playerId === clientMeta!.playerId);
             if (p) {
               p.connected = false;
