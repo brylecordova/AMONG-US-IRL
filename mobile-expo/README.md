@@ -53,7 +53,9 @@ If you want to distribute an installable `.apk` file to Android players instead 
 ---
 
 ## Features Included
-- **Live Native Camera QR Scanner (`CameraView`)**: Instant QR reading + torch toggle + camera flip + manual station code fallback (`WIR1`, `RED`, `EMRG`).
-- **Start-of-Game Role Reveal Splash**: Animated `"SHHHHH!"` -> dramatic Role Reveal splash at mission start, followed by an identical **Plain Crewmate Stealth HUD** so shoulder-surfing never gives away Impostors or Investigators.
+- **Live Native Camera QR Scanner (`CameraView`)**: Instant QR reading + torch toggle + camera flip + manual station code fallback (`WIR1`, `CAMS`, `RED`, `EMRG`).
+- **Live 5 FPS Security Camera (CCTV)**: Scan the Security Cam QR (or enter `CAMS`) during gameplay to select an alive crewmate and view their live feed. Streams via `CameraView` on mobile, `getUserMedia` webcam on Expo Web tabs, or an automatic test-feed canvas fallback if a browser tab lacks hardware camera access.
+- **Start-of-Game Role Reveal Splash**: Animated `"SHHHHH!"` -> dramatic Role Reveal splash at mission start, followed by an identical **Plain Crewmate Stealth HUD** so shoulder-surfing never gives away special roles.
 - **Privacy-Locked Ship Terminal**: Tap **Terminal** and unlock privately to check your secret role, Kill/Scan cooldowns, or trigger **Kill Power (`BLACKOUT`)** and **Signal Jam (60s)**.
-- **All 16 Interactive Skeld Tasks**, **Rejoin Code Support**, and **Emergency Meeting `HERE!` Check-In**.
+- **Leave Lobby & Exit Confirmation**: Confirmation dialog on both **Leave Lobby** and **Exit** before disconnecting and clearing saved auto-rejoin state.
+- **All 16 Interactive Skeld Tasks**, **Rejoin Code Support**, **Dead Body Report Prompt**, and **Emergency Meeting `HERE!` / `Vote Now` / `Skip Vote` Flow**.

@@ -1,6 +1,6 @@
 # AMONG-US IRL — Android Companion App
 
-Native Android WebView shell with **CameraX + ML Kit Barcode Scanning** so players can scan task badges, suit QRs, and the Emergency Meeting QR over plain local Wi-Fi (`http://192.168.x.x:3000`) without HTTPS certificate setup.
+Native Android WebView shell with **CameraX + ML Kit Barcode Scanning** and a **5 FPS Rear Security Camera Service** so players can scan task badges, suit QRs, Emergency/Reactor QRs, and the Security Monitor (`CAMS`) QR over plain local Wi-Fi (`http://192.168.x.x:3000`) without HTTPS certificate setup.
 
 ## Option A: Build Automatically via GitHub Actions (No Android Studio Needed)
 
@@ -22,4 +22,6 @@ Native Android WebView shell with **CameraX + ML Kit Barcode Scanning** so playe
 
 1. Connect phone and Host PC to the same Wi-Fi network.
 2. Open **AMONG-US IRL** on Android and tap **Scan Host Join QR Code** (aim at the Host PC's **Join Mission QR**).
-3. Grant **Camera** permission when prompted. All in-game QR scans automatically use the native CameraX scanner and stay open until a valid QR code is scanned or closed manually.
+3. Grant **Camera** (and notification permission on Android 13+) when prompted. All in-game QR scans automatically use the native CameraX scanner and stay open until a valid QR code is scanned or closed manually.
+4. **Live Security Cam (`CAMS`)**: During an active match, `SecurityCamService` stays in standby and streams your rear camera at ~5 FPS only while another player is actively watching your feed on the Security Monitor (with a live banner/notification indicator).
+5. **Auto-Rejoin, Change Host, & Leave Lobby**: Closing or refreshing the app automatically rejoins your active match. Tapping **Change Host** switches the Host URL while preserving saved session data, whereas tapping **Leave Lobby** shows a confirmation dialog and clears saved auto-rejoin data so you exit cleanly.
