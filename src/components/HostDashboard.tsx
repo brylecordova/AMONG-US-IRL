@@ -45,7 +45,9 @@ import {
 } from './PrintedQrCards';
 import { QrCodeImg } from './QrCodeImg';
 import { SmoothSlider } from './SmoothSlider';
+import { SpaceEjectionOverlay } from './SpaceEjectionOverlay';
 import { TvSpectatorView } from './TvSpectatorView';
+import { formatEjectionSubtitle, shouldShowVerdictEjection } from '../utils/ejection';
 import { soundEngine } from '../utils/sound';
 
 interface HostDashboardProps {
@@ -92,9 +94,16 @@ export const HostDashboard: React.FC<HostDashboardProps> = ({
   const [printNotice, setPrintNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(soundEngine.isMuted());
+  const [dismissedVerdictMeetingId, setDismissedVerdictMeetingId] = useState<string | null>(null);
   const printSheetRef = React.useRef<HTMLDivElement | null>(null);
   const apkInputRef = React.useRef<HTMLInputElement | null>(null);
   const lastHandledEventSeqRef = React.useRef<number>(0);
+
+  useEffect(() => {
+    if (state.phase !== 'MEETING') {
+      setDismissedVerdictMeetingId(null);
+    }
+  }, [state.phase]);
 
   const [apkStatus, setApkStatus] = useState<ApkStatusInfo | null>(null);
   const [apkLoading, setApkLoading] = useState(false);
@@ -2422,6 +2431,35 @@ ${compiledCss}
           </div>
         </main>
       )}
+
+      <AnimatePresence>
+        {!showTvMode &&
+          shouldShowVerdictEjection({
+            phase: state.phase,
+            meeting: state.meeting,
+            dismissedMeetingId: dismissedVerdictMeetingId,
+          }) &&
+          state.meeting?.ejectedPlayer && (
+            <SpaceEjectionOverlay
+              key={`host-verdict-ejection-${state.meeting.id}`}
+              color={state.meeting.ejectedPlayer.color}
+              alive
+              caption={
+                state.meeting.verdictMessage ||
+                `${state.meeting.ejectedPlayer.name} was ejected.`
+              }
+              subtitle={formatEjectionSubtitle({
+                isSelf: false,
+                confirmEjects: state.settings.confirmEjects,
+                revealedRole: state.meeting.ejectedPlayer.revealedRole,
+                sessionCode: state.sessionCode,
+              })}
+              flightDurationSec={4.6}
+              skipLabel="View Votes"
+              onSkip={() => setDismissedVerdictMeetingId(state.meeting!.id)}
+            />
+          )}
+      </AnimatePresence>
     </div>
   );
 };

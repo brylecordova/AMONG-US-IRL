@@ -26,6 +26,8 @@ import {
 import { CrewmateAvatar } from './CrewmateAvatar';
 import { GalacticBackdrop } from './GalacticBackdrop';
 import { QrCodeImg } from './QrCodeImg';
+import { SpaceEjectionOverlay } from './SpaceEjectionOverlay';
+import { formatEjectionSubtitle } from '../utils/ejection';
 
 interface TvSpectatorViewProps {
   state: HostGameState;
@@ -445,30 +447,34 @@ export const TvSpectatorView: React.FC<TvSpectatorViewProps> = ({
                   <div className="relative overflow-hidden rounded-3xl border-2 border-cyan-400/40 bg-[#050814]/90 p-10 min-h-[380px] flex flex-col items-center justify-center text-center shadow-2xl">
                     {/* Animated Airlock Ejection Cutscene */}
                     {state.meeting.ejectedPlayer ? (
-                      <div className="w-full space-y-6">
-                        <div className="relative h-36 w-full overflow-hidden flex items-center justify-center">
-                          <motion.div
-                            initial={{ x: -240, rotate: -25, scale: 1.15, opacity: 1 }}
-                            animate={{ x: 320, rotate: 420, scale: 0.45, opacity: 0.15 }}
-                            transition={{ duration: 4.5, ease: 'easeInOut' }}
-                            className="inline-flex"
-                          >
-                            <CrewmateAvatar
-                              color={state.meeting.ejectedPlayer.color}
-                              alive
-                              size={96}
-                            />
-                          </motion.div>
+                      <>
+                        <SpaceEjectionOverlay
+                          key={`tv-verdict-ejection-${state.meeting.id}`}
+                          color={state.meeting.ejectedPlayer.color}
+                          alive
+                          caption={
+                            state.meeting.verdictMessage ||
+                            `${state.meeting.ejectedPlayer.name} was ejected.`
+                          }
+                          subtitle={formatEjectionSubtitle({
+                            isSelf: false,
+                            confirmEjects: state.settings.confirmEjects,
+                            revealedRole: state.meeting.ejectedPlayer.revealedRole,
+                            sessionCode: state.sessionCode,
+                          })}
+                          flightDurationSec={3.6}
+                        />
+                        <div className="space-y-4">
+                          <CrewmateAvatar
+                            color={state.meeting.ejectedPlayer.color}
+                            alive={false}
+                            size={80}
+                          />
+                          <h2 className="font-display text-4xl sm:text-5xl font-bold text-white tracking-wide">
+                            {state.meeting.verdictMessage}
+                          </h2>
                         </div>
-                        <motion.h2
-                          initial={{ opacity: 0, y: 12 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: 0.4 }}
-                          className="font-display text-4xl sm:text-5xl font-bold text-white tracking-wide"
-                        >
-                          {state.meeting.verdictMessage}
-                        </motion.h2>
-                      </div>
+                      </>
                     ) : (
                       <div className="space-y-4">
                         <AlertTriangle className="w-12 h-12 text-amber-300 mx-auto" />
